@@ -1,0 +1,98 @@
+SmartKit Studio – user guide (v0.12)
+==================================================================================
+
+START: double-click "SmartKit Studio.bat"
+
+1 Drum plugin    Pick the plugin, name the kit, Load plugin (progress bar shows the time),
+                 Open plugin window, choose the kit, wait for it to load, then press
+                 "Kit loaded – continue" in the small SmartKit window (top right of the screen).
+                 SmartKit then goes on to step 2 by itself. "Use saved kit" next time.
+1 Sources (samples) Sounds you already have – no plugin and no recording needed. Mix them with plugin sounds
+                 in one kit if you like. Their sounds appear on tab 2 like the plugin's (type, code, name, pads).
+                 - Add folder…  any folder of WAV files, e.g. a folder in Samples on the SD card. Names are read
+                   the way common drum converters name them: '<drum>_<id> <CODE> <number>v<velocity>':
+                   K kick, Sn snare, SnR rimshot, SnSS sidestick, T1..T5 toms (T1R rim), HBC/HBT/HBO1-5 hat bow
+                   closed/tight/open, HEC/HET/HEO1-5 hat edge, HCH or HP pedal chick, HSP or HF foot splash,
+                   Ri1/Ri1B/Ri1E ride bow/bell/edge, C1E/Cr1E crash edge, C1/Cr1 crash bow, Ch1E china, Sp1E splash,
+                   P1 percussion. Other packs by their words (kick, snare, rim, side, tom, hat, closed, open 2, pedal,
+                   foot, crash, ride, bell, china, splash, choke …); 1-2.1 style numbers = drum, layer, take;
+                   left/right file pairs (…01L / …01R) become stereo. Without a velocity in the name the hits
+                   are sorted by loudness. A folder with more than 60 sounds is added switched off: tick what you want.
+                 - Add SFZ / Decent Sampler / Hydrogen…  sampler instruments: velocity ranges and round robins
+                   come from the file; several mics on one key (close + overheads + room) are mixed like the
+                   sampler plays them.
+                 - Add Strike instruments…  .sin files on the SD card (or a copy of it): rebuilt with the new
+                   codes and memory plan. Hi-hats are split into their pedal positions (closed, open 1 …,
+                   chick, splash). Preset (internal) samples cannot be read.
+                 - Add recordings to cut…  one WAV per drum, played soft to loud with gaps: cut into single hits.
+                 All samples are converted to 48 kHz like the factory ones. Right-click a sound on tab 2 →
+                 "Code (5 letters)" if a name was read wrong. Remove takes a source out (files are not touched).
+2 Find sounds    With Superior Drummer / EZdrummer the instruments and articulations are read from
+                 the plugin itself; other plugins: every note in the "notes" box is tried.
+                 Columns: "sound in the plugin" = articulation · drum name (SD3 code), and the
+                 Strike instrument name = 5-letter code + drum name, max 26 plain characters, e.g.
+                 SNRRO_6.5x14 TamaBellBr80s, RIDBW_22 Agop Mantra, SNRHDMU_6.5x14 TamaBellBr80 (2 sounds).
+                 Articulations switched off (not loaded) in Superior Drummer are left out - the
+                 plugin plays a stand-in sound for them. Two kit pieces with the same name are shown
+                 with their drum (e.g. "Crash 2 - 18" Istanbul Agop 30th Anniversary").
+                 The code = instrument type first (3 letters), then the articulation (2 letters):
+                   KCK kick, SNR snare, TOM tom, CRS crash, RID ride, SPL splash, CHN china, STK stack,
+                   PRC percussion; hi-hat HH + surface B bow / E edge / L bell / P pedal + articulation.
+                   Drums: HD head (center), RI rimshot, RO rim only, XS cross-stick, MC mid center,
+                   FL flam, RF ruffs, LH left hand, MU muted, ED edge.  Kick: HD, OP open, HB beater stays.
+                   Hi-hat: HHBCL bow closed, HHBTT bow tight, HHBO0-6 bow open 0-6, HHECL edge closed,
+                   HHETT edge tight, HHEMN edge open min, HHEO0-6 edge open, HHLCL bell closed, HHLO0-6
+                   bell open, HHPCL pedal chick, HHPSP pedal foot splash. Whole hi-hat instruments:
+                   HHBOW, HHEDG, HHPED (their sample files keep each articulation's code).
+                   Cymbals: ED crashed (edge), BW bow tip, SH bow shank, BL bell, BT bell tip, MU muted,
+                   CH choke, FX, TL tail.  e.g. CRSED crash edge, RIDBW ride bow, RIDBL ride bell.
+                 (SD3 doesn't store articulation names; these are read from its codes, checked against
+                 Superior Drummer's own key map.)
+                 Superior Drummer's MIDI In / E-drum map (e.g. "STRIKE - SD3") is read from the kit:
+                 SmartKit plays each sound with a note that really reaches it. Sounds the map makes
+                 unreachable are listed - switch the map off in the plugin to record them.
+                 "Instruments only": every ticked sound is built as an instrument, the kit gets no
+                 pads - assign them on the module.
+                 "Library names" renames every sound this way (also ones you renamed before).
+                   - click the box in the "use" column to switch a sound on/off (on a group: all of it)
+                   - double-click a name to rename it
+                   - right-click the type or the Strike pad to change it (hi-hat positions are in the
+                     "Hi-hat" submenu). Choosing a pad takes it away from the sound that had it; to put
+                     two sounds of the same drum on one pad use "Share a pad with another sound".
+                   - pad "Instrument only": the sound is saved as a user instrument but NOT put in the
+                     kit (e.g. rimshot kept for later: clone the kit on the module and swap it in)
+                   - values with * were chosen automatically – check them by ear
+                   - Save preset / Load preset keeps your pad choices for the next kit
+                 Type = what kind of drum it is. It decides: memory priority and mono/stereo (both
+                 set per type on the Settings tab), how hi-hat sounds are assembled into the
+                 bow/edge/pedal instruments, and the pad suggestions.
+3 Settings       Instrument folders (default): Instruments\<kit>\KICK, SNARE, TOM, HIHAT, CRASH, RIDE,
+                 SPLASH, CHINA, STACK, PERC\<instrument>.sin. Also: a folder per type (<kit> KICKS …),
+                 one per kit, or shared "all KICKS" style folders.
+                 Compressed sounds: some plugin kits are squashed by their mixer (compressor / limiter),
+                 so above a certain velocity the hits stop getting louder while the tone still changes
+                 (e.g. a snare: loudness flat from velocity 51 to 127). SmartKit finds that point for
+                 every sound, keeps about a third of the velocity layers for the hard hits, maps the
+                 zones to the plugin's own velocities and (default) gives the hard hits back their
+                 loudness steps ("dB given back", 8 = the hardest hit is 8 dB louder than the knee).
+                 Logged as "compressed - the loudness hardly rises above velocity N". Samples are named <code_instrument> [p<pedal>] v<velocity> r<take>,
+                 e.g. HHBO1_14 Agop Trad Jazz p067 v100 r1.wav.
+                 Levels: keep the kit balance, or maximise every instrument (-1 dBFS each).
+                 Empty pad zones (crash bow, ride edge/bell, rims, kick 2) can play their partner.
+                 Hi-hat closed at 127 = factory pedal layout (…/67-90/91-126/127).
+                 Plugin start-up wait: SmartKit checks for sound itself, so 15 s is enough.
+                 Velocities, takes, memory, several sounds on one pad (combine or layer A + B),
+                 and the size of "Instrument only" sounds (0 = as big as the same kind in the kit).
+                 Memory planner: per type a priority 0-10 (10 = gets memory first, 0 = always the
+                 smallest setting) and mono / stereo if wide / stereo. "Defaults" resets them.
+                 How it works: every sound starts small (3 velocity layers, 1 take, short tails);
+                 upgrades (more layers, more takes, longer tails) go one at a time to the sound
+                 where they add the most quality per MB x priority, until the memory is full.
+File menu        Open preset / Save preset (Ctrl+O / Ctrl+S), Save settings / Load settings
+                 (all of tabs 3 and 4, in the Settings folder), open the project folder, the log
+                 file or the output folder, Close.
+4 Strike settings  Per type of drum: level, pan, decay, pitch (semi/fine), filter cutoff,
+                 velocity to level/decay/filter/pitch, velocity low/high, reverb send. Kit effects:
+                 kit level, reverb, compressor, EQ (FX1/FX2 off). Pads send the plugin's MIDI note.
+5 Record & build Record (plugin sounds only), then Build kit (output folder or the SD card).
+                 Everything in the log is also saved to Projects\<kit>\log.txt.

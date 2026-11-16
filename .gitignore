@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Per-user data written next to the app
+Projects/
+Outputs/
+Presets/
+Settings/
+studio_settings.json
+smartkit_settings.json
+smartkit_errors.txt
+*.lnk
+
+# Audio and Strike content (never commit samples you don't own)
+*.wav
+*.sin
+*.skt
+!template.skt
+*.zip
