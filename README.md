@@ -50,7 +50,7 @@ folder of drum samples into a ready-to-play kit for the Alesis Strike / Strike P
 1. Download this repository (green **Code** button → **Download ZIP**) and unzip it, e.g. to
    `Documents\SmartKit Studio`.
 2. Double-click **`SmartKit Studio.bat`**. The first start installs the Python add-ons (needs internet).
-3. Follow the tabs from left to right:
+3. Follow the steps from left to right (dark theme by default, **View → Light** for daylight):
    1. **Sources** – load a drum plugin and pick its kit, and/or add sample folders, SFZ / Decent Sampler /
       Hydrogen files, Strike instruments or recordings.
    2. **Find sounds** – read the plugin's sounds; check type, name and Strike pad for every sound.

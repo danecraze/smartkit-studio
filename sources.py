@@ -5,7 +5,7 @@ Every source is turned into 'sounds' (one articulation of one drum each) that Sm
 the plugin's sounds, with the same fields (type, 5-letter code, Strike name, pads).  A sound keeps its files in
 row['src'] = {'kind': ..., 'items': [{'f': path or [paths], 'v': velocity or None, 'g': gain dB, 'lr': bool}],
 'slice': bool}; load_hits() turns them into measured hits for the memory planner, like plugin recordings."""
-import os, re, glob, json
+import os, re, glob
 import xml.etree.ElementTree as ET
 import numpy as np
 from analyse import read_wav, measure, split_hits

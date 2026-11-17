@@ -42,3 +42,13 @@ def test_sin_round_trip():
     assert d['header'][1] == SF.CAT_HIHAT and len(d['zones']) == 2
     assert d['zones'][1][17] == 120 and d['zones'][1][10] == 7
     assert d['paths'][1] == ':Kit/a v127 r1.wav'
+
+
+def test_safe_names_never_leave_their_folder():
+    import smartkit as SK
+    for bad in ('..', '.', '  ', '', '../x', '..\\..\\Windows', 'CON', 'nul.txt', 'Kit. ', '...hidden'):
+        n = SK.safe(bad, 26, fallback='Kit')
+        assert n and n not in ('.', '..') and not n.startswith('.') and not n.endswith(('.', ' '))
+        assert '/' not in n and '\\' not in n
+        assert n.split('.')[0].upper() not in SK.WIN_RESERVED
+    assert SK.safe('SNRHD_14 Maple') == 'SNRHD_14 Maple'

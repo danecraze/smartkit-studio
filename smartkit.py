@@ -18,9 +18,21 @@ from plan import Artic, LADDER, WEIGHT, fit_budget, velocity_ranges, expand_comp
 MiB = 1024 * 1024
 
 
-def safe(s, n=26):
-    s = re.sub(r'\s+', ' ', re.sub(r'[^A-Za-z0-9 ._()-]', ' ', s)).strip()   # plain characters only
-    return s[:n].rstrip()
+WIN_RESERVED = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+
+
+def safe(s, n=26, fallback='Untitled'):
+    """A file / folder name the module and Windows accept: plain characters only, no leading or trailing
+    dots or spaces (so never '.' or '..', which would write outside the kit's folders), not a reserved
+    Windows device name, at most n characters."""
+    s = re.sub(r'\s+', ' ', re.sub(r'[^A-Za-z0-9 ._()-]', ' ', str(s))).strip(' .')
+    s = s[:n].rstrip(' .')
+    if not s:
+        s = fallback[:n]
+    base, dot, rest = s.partition('.')
+    if base.strip().upper() in WIN_RESERVED:
+        s = (base.strip() + '_' + dot + rest)[:n]
+    return s
 
 
 def find_articulations(root):
@@ -347,8 +359,12 @@ def build_kit(artics, pad_override, args, log=print):
     peak = max(max(h.peak for h in a.hits) for a in used_artics + extras) if used_artics + extras else 1.0
     target = float(getattr(args, 'kit_peak', 0.891))
     kit_gain = target / peak
-    per_inst = getattr(args, 'levels', 'kit') == 'instrument'
-    if per_inst:
+    mode = getattr(args, 'levels', 'kit')
+    per_inst = mode in ('instrument', 'mix')
+    if mode == 'mix':
+        log('Levels: every instrument at full level (-1 dBFS); the kit pads are turned down to keep the '
+            'plugin\'s mix (loudest instrument at Level 90, Strike Level curve measured on the module)')
+    elif per_inst:
         log('Levels: every instrument is raised until its loudest hit is at -1 dBFS (balance the drums with the '
             'pad levels on the module)')
     else:
@@ -396,6 +412,7 @@ def build_kit(artics, pad_override, args, log=print):
         zones, paths, parts = [], [], []
         g_inst = target / max(max(h.peak for h in a.hits) for a, *_ in inst['parts']) if per_inst else kit_gain
         inst['gain_db'] = 20 * np.log10(g_inst)
+        inst['mix_db'] = 20 * np.log10(kit_gain / g_inst)          # pad gain that brings back the kit balance
         for a, plo, phi, splash in inst['parts']:
             layers = a.render(a.level)
             ranges = velocity_ranges([[h for _, h in g] for g in layers], args.curve,
@@ -462,9 +479,26 @@ def build_kit(artics, pad_override, args, log=print):
                     log(f'  {pid} {PAD_LABEL.get(pid, "")} was empty: plays {assign[partner].split("/")[-1][:-4]} '
                         f'(from {partner})')
         layer_kw, pad_patch = {}, {}
+        mix_level = {}
+        if mode == 'mix':
+            import levelcal
+            curve = getattr(args, 'level_curve', None)
+            loud = max((i['mix_db'] for i in instruments if 'path' in i and not i.get('extra')), default=0.0)
+            log('Pad levels (plugin mix):')
+            for i in instruments:
+                if 'path' not in i or i.get('extra'):
+                    continue
+                db = i['mix_db'] - loud                      # 0 for the loudest instrument
+                top = getattr(args, 'mix_top_level', 90)     # the loudest instrument sits at Level 90
+                lv = levelcal.level_for_db(curve, levelcal.db_for_level(curve, top) + db)
+                mix_level[i['path']] = lv
+                note = '  (lowest useful level – quieter than the plugin)' if db < levelcal.db_for_level(curve, 1) else ''
+                log(f"  {i['path'].split('/')[-1][:-4]:<28} {db:+6.1f} dB  → Level {lv}{note}")
         for pid, path in assign.items():
             role = role_by_path.get(path, 'other')
             layer_kw[pid] = dict(layer_by_role.get(role, {}))
+            if path in mix_level:
+                layer_kw[pid]['level'] = mix_level[path]
             pp = dict((getattr(args, 'pad_settings', None) or {}).get(role, {}))
             note = (getattr(args, 'pad_notes', None) or {}).get(pid)
             if note is not None:

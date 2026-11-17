@@ -14,10 +14,19 @@ import host as H
 import smartkit as SK
 import sd3state, sd3names
 import sources as SRC
+import theme as T
+import levelcal
+
+if sys.platform == 'win32':                     # own taskbar entry (with SmartKit's icon, not Python's) –
+    try:                                        # must be set before the first window exists
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('SmartKitStudio.App')
+    except Exception:
+        pass
 from analyse import load_articulation, dedupe, read_wav, measure, guess_role
 from plan import Artic, WEIGHT
 
-VERSION = '0.12'
+VERSION = '0.13'
 PROJECTS = os.path.join(HERE, 'Projects')
 PRESETS = os.path.join(HERE, 'Presets')
 SETTINGS_DIR = os.path.join(HERE, 'Settings')
@@ -52,7 +61,8 @@ FOLDER_MODES = ['A folder per type: <kit> KICKS, <kit> SNARES …', 'One folder 
                 'Kit folder with type subfolders: <kit>\\CRASH, <kit>\\SNARE …']
 FOLDER_NESTED = FOLDER_MODES[3]
 COMP_MODES = ['More layers for the hard hits + restore loudness steps', 'More layers for the hard hits only', 'Off']
-LEVEL_MODES = ['Keep the kit balance (one gain for all)', 'Maximise every instrument (each to -1 dBFS)']
+LEVEL_MODES = ['Keep the kit balance (one gain for all)', 'Maximise every instrument (each to -1 dBFS)',
+               "Every instrument at full level, kit pads keep the plugin's mix"]
 
 # ---- Strike settings (tab 4): per type layer defaults, written into each instrument and the kit pads
 REVERB_TYPES = ['OFF', 'AmbBrite', 'BdSpring', 'BigGate', 'CloseMic', 'FxGate', 'HugeSpac', 'LgSpacy', 'Md80sRm',
@@ -85,7 +95,8 @@ HAT_NOTES = {'H1B': 8, 'H1E': 7, 'H1F': 22}
 STEP_TEXT = {
     'plugin': "Sounds can come from a drum plugin (top) and/or from samples you already have (bottom) – or both "
               "mixed in one kit.\n"
-              "PLUGIN: 1. Pick your drum plugin and give the kit a name.   2. Press Load plugin (Superior Drummer takes about "
+              "KIT: everything belongs to the kit named top right – type to rename it, pick another from the list, File → New kit for a fresh one.\n"
+              "PLUGIN: 1. Pick your drum plugin.   2. Press Load plugin (Superior Drummer takes about "
               "a minute).   3. Press Open plugin window, load the kit/preset you want, wait until it has finished "
               "loading, then press  ✔ Kit loaded – continue  in the small SmartKit window (top right). "
               "Turn off humanize/randomising in the plugin.\n"
@@ -110,7 +121,7 @@ STEP_TEXT = {
                 "may stay stereo.",
     'strike': "How the instruments and the kit are set up on the module: amp, pitch, filter and velocity settings per "
               "type of drum, and the kit effects. Everything can still be changed on the module or in the editor.",
-    'build': "Record plays every used sound at every chosen velocity (sounds already recorded are skipped unless "
+    'build': "Record + build does both in one go. Record plays every used sound at every chosen velocity (sounds already recorded are skipped unless "
              "you tick re-record). Build then plans the memory and writes Kits, Instruments and Samples to the "
              "output folder – pick the SD card to put it straight on the module.\n"
              "When the card goes back into the module it re-reads the user kits, which takes a moment.",
@@ -118,7 +129,8 @@ STEP_TEXT = {
 
 
 def safe_name(s):
-    return re.sub(r'\s+', ' ', re.sub(r'[^A-Za-z0-9 ._()-]', ' ', s)).strip() or 'Kit'
+    """Kit / project folder name (never '.', '..' or empty, so it always stays inside Projects)."""
+    return SK.safe(s, 26, fallback='Kit')
 
 
 class App(tk.Tk):
@@ -138,24 +150,70 @@ class App(tk.Tk):
             self.st = json.load(open(SETTINGS_FILE))
         except Exception:
             self.st = {}
+        self.v_theme = tk.StringVar(value=self.st.get('theme', 'dark'))
+        T.apply(self, self.v_theme.get())
+        T.title_bar(self)
+        self.set_icon()
         self.make_menu()
-        nb = ttk.Notebook(self); nb.pack(fill='both', expand=True, padx=6, pady=6)
+        sb = ttk.Frame(self, style='Bar.TFrame'); sb.pack(fill='x', side='bottom')
+        ttk.Separator(sb).pack(fill='x', side='top')
+        self.status = tk.StringVar(value='Ready.')
+        ttk.Label(sb, textvariable=self.status, anchor='w', style='Bar.TLabel').pack(side='left', fill='x', expand=True,
+                                                                                    padx=12, pady=5)
+        self.busybar = ttk.Progressbar(sb, mode='indeterminate', length=160)
+        nb = ttk.Notebook(self, style='Steps.TNotebook')
+        self.steps = T.StepBar(self, nb); self.steps.pack(fill='x', side='top')
+        ttk.Separator(self).pack(fill='x', side='top')
+        nb.pack(fill='both', expand=True)
+        _add = nb.add
+        nb.add = lambda child, **kw: (_add(child, **kw), self.steps.add(kw.get('text', '')))
         self.nb = nb
         self.tab_plugin(nb); self.tab_sounds(nb); self.tab_settings(nb); self.tab_strike(nb); self.tab_build(nb)
-        sb = ttk.Frame(self); sb.pack(fill='x', side='bottom')
-        self.status = tk.StringVar(value='Ready.')
-        ttk.Label(sb, textvariable=self.status, anchor='w').pack(side='left', fill='x', expand=True, padx=4)
-        self.busybar = ttk.Progressbar(sb, mode='indeterminate', length=160)
-        self.busybar.pack(side='right', padx=4, pady=2)
+        self.retag()
         self.after(100, self.pump)
         self.protocol('WM_DELETE_WINDOW', self.on_close)
         self.refresh_project()
 
     # ============================================================ helpers
     def instructions(self, parent, key):
-        f = ttk.LabelFrame(parent, text='What to do')
-        f.pack(fill='x', padx=8, pady=6)
-        ttk.Label(f, text=STEP_TEXT[key], wraplength=1010, justify='left').pack(anchor='w', padx=8, pady=4)
+        """The help text at the top of a step; click 'What to do' to fold it away (remembered)."""
+        f = ttk.Frame(parent); f.pack(fill='x', padx=16, pady=(12, 6))
+        head = ttk.Label(f, style='HelpHead.TLabel', cursor='hand2')
+        head.pack(anchor='w')
+        body = T.WrapLabel(f, text=STEP_TEXT[key], style='Help.TLabel')
+        if not hasattr(self, 'help_parts'):
+            self.help_parts = []
+        self.help_parts.append((head, body))
+        self.show_help()
+
+        def toggle(_e=None):
+            self.st['help'] = not self.st.get('help', True); self.show_help(); self.save_settings()
+        head.bind('<Button-1>', toggle)
+        head.bind('<Enter>', lambda e: head.state(['active'])); head.bind('<Leave>', lambda e: head.state(['!active']))
+
+    def show_help(self):
+        on = self.st.get('help', True)
+        for h, b in self.help_parts:
+            h.configure(text=('▾  WHAT TO DO' if on else '▸  WHAT TO DO  (click to show)'))
+            if on: b.pack(fill='x', anchor='w', pady=(4, 0))
+            else: b.pack_forget()
+
+    def page(self, nb, title):
+        """A notebook page that scrolls when the window is too small for it."""
+        p = T.ScrollPage(nb); nb.add(p, text=title)
+        return p.body
+
+    def set_icon(self):
+        T.app_icon(self)
+
+    def set_theme(self):
+        T.apply(self, self.v_theme.get())
+        self.retag(); self.save_settings()
+
+    def retag(self):
+        if hasattr(self, 'tree'):
+            self.tree.tag_configure('off', foreground=T.C['faint'])
+            self.tree.tag_configure('group', font=T.F['semi'])
 
     def project_dir(self):
         return os.path.join(PROJECTS, safe_name(self.v_kit.get()))
@@ -170,6 +228,8 @@ class App(tk.Tk):
             d['stereo_by_type'] = {r: v.get() for r, v in self.v_ster.items()}
         d['load_seconds'] = self.st.get('load_seconds', 70)
         d['folders_v10'] = True
+        if hasattr(self, 'v_theme'): d['theme'] = self.v_theme.get()
+        d['help'] = self.st.get('help', True)
         if hasattr(self, 'v_layer'):
             d['layer'] = {r: {k: v.get() for k, v in cols.items()} for r, cols in self.v_layer.items()}
             d['kitfx'] = {k: v.get() for k, v in self.v_fx.items()}
@@ -229,17 +289,18 @@ class App(tk.Tk):
     def log(self, s):
         self.q.put(('log', s))
         try:                                     # also keep a log file in the project folder
-            os.makedirs(self.project_dir(), exist_ok=True)
-            with open(os.path.join(self.project_dir(), 'log.txt'), 'a', encoding='utf-8') as f:
+            d = getattr(self, 'proj_dir', None) or self.project_dir()   # plain attribute: safe from worker threads
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, 'log.txt'), 'a', encoding='utf-8') as f:
                 f.write(time.strftime('%H:%M:%S ') + s + '\n')
         except Exception:
             pass
 
     def set_busy(self, on, text=None):
         if on:
-            self.busybar.start(12)
+            self.busybar.pack(side='right', padx=12, pady=5); self.busybar.start(12)
         else:
-            self.busybar.stop()
+            self.busybar.stop(); self.busybar.pack_forget()
         if text:
             self.status.set(text)
 
@@ -258,7 +319,7 @@ class App(tk.Tk):
             except Exception:
                 self.log('ERROR:\n' + traceback.format_exc()); self.q.put(('done', (None, None)))
                 self.q.put(('error', 'Something went wrong – see the log on the Record & build tab\n(also saved as log.txt in '
-                           + self.project_dir() + ').'))
+                           + str(getattr(self, 'proj_dir', '') or PROJECTS) + ').'))
         threading.Thread(target=work, daemon=True).start()
 
     def progress(self, i, n, text):
@@ -270,6 +331,8 @@ class App(tk.Tk):
                 kind, val = self.q.get_nowait()
                 if kind == 'log':
                     self.logbox.insert('end', val + '\n'); self.logbox.see('end')
+                elif kind == 'status':
+                    self.status.set(val)
                 elif kind == 'progress':
                     i, n, text = val
                     for pb in (self.pbar, self.pbar2):
@@ -279,7 +342,7 @@ class App(tk.Tk):
                     self.busy = False
                     self.set_busy(False)
                     for pb in (self.pbar, self.pbar2):
-                        pb['value'] = pb['maximum']
+                        pb['value'] = 0
                     self.status.set('Ready.')
                     cb, r = val
                     if cb: cb(r)
@@ -290,8 +353,32 @@ class App(tk.Tk):
         self.after(100, self.pump)
 
     def make_menu(self):
-        mb = tk.Menu(self)
-        fm = tk.Menu(mb, tearoff=0)
+        bar = ttk.Frame(self, style='Bar.TFrame'); bar.pack(fill='x', side='top')
+        ttk.Label(bar, text='SmartKit Studio', style='BarTitle.TLabel').pack(side='left', padx=(14, 4), pady=6)
+        ttk.Label(bar, text=VERSION, style='BarMuted.TLabel').pack(side='left', padx=(0, 14), pady=(8, 6))
+
+        def menu(label):
+            m = T.Menu(self)
+            b = ttk.Button(bar, text=label, style='BarMenu.TButton', takefocus=False,
+                           command=lambda: m.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()))
+            b.pack(side='left')
+            return m
+        # the kit = the project: its name sits in the header, on every step
+        kb = ttk.Frame(bar, style='Bar.TFrame'); kb.pack(side='right', padx=(0, 14), pady=6)
+        ttk.Label(kb, text='KIT', style='KitLabel.TLabel').pack(side='left', padx=(0, 8))
+        self.v_kit = self.var('kit', 'My SD3 Kit')
+        self.v_kit.trace_add('write', lambda *a: len(self.v_kit.get()) > 26 and self.v_kit.set(self.v_kit.get()[:26]))
+        self.kit_box = ttk.Combobox(kb, textvariable=self.v_kit, width=26, font=T.F['title'], style='Kit.TCombobox',
+                                    postcommand=self.fill_kit_list)
+        self.kit_box.pack(side='left')
+        self.kit_box.bind('<FocusOut>', lambda ev: self.kit_renamed())
+        self.kit_box.bind('<Return>', lambda ev: (self.kit_renamed(), self.focus_set()))
+        self.kit_box.bind('<<ComboboxSelected>>', lambda ev: self.open_kit())
+        self.kit_tip = ttk.Label(kb, text='', style='BarMuted.TLabel'); self.kit_tip.pack(side='left', padx=(10, 0))
+        fm = menu('File')
+        fm.add_command(label='New kit…', command=self.new_kit)
+        fm.add_command(label='Clean up this kit\'s project files…', command=self.cleanup_project)
+        fm.add_separator()
         fm.add_command(label='Open preset…', command=self.load_preset, accelerator='Ctrl+O')
         fm.add_command(label='Save preset…', command=self.save_preset, accelerator='Ctrl+S')
         fm.add_separator()
@@ -303,15 +390,15 @@ class App(tk.Tk):
         fm.add_command(label='Open output folder / SD card', command=lambda: self.open_path(self.v_out.get()))
         fm.add_separator()
         fm.add_command(label='Close', command=self.on_close, accelerator='Alt+F4')
-        mb.add_cascade(label='File', menu=fm)
-        hm = tk.Menu(mb, tearoff=0)
+        vm = menu('View')
+        vm.add_radiobutton(label='Dark', variable=self.v_theme, value='dark', command=self.set_theme)
+        vm.add_radiobutton(label='Light', variable=self.v_theme, value='light', command=self.set_theme)
+        hm = menu('Help')
         hm.add_command(label='Read me', command=lambda: self.open_path(os.path.join(HERE, 'USER_GUIDE.txt')))
         hm.add_command(label='About', command=lambda: messagebox.showinfo(
             'SmartKit Studio', f'SmartKit Studio {VERSION}\nTurns a drum VST3 kit or your own samples into an Alesis Strike / '
             'Strike Pro kit.\n\nFree, open source (MIT licence). Not affiliated with or endorsed by Alesis, inMusic or '
             'Toontrack; all trademarks belong to their owners. Use it only with sounds you are licensed to use.'))
-        mb.add_cascade(label='Help', menu=hm)
-        self.config(menu=mb)
         self.bind_all('<Control-o>', lambda e: self.load_preset())
         self.bind_all('<Control-s>', lambda e: self.save_preset())
 
@@ -350,7 +437,7 @@ class App(tk.Tk):
 
     # ============================================================ tab 1: plugin
     def tab_plugin(self, nb):
-        t = ttk.Frame(nb); nb.add(t, text='1 · Sources')
+        t = self.page(nb, '1 · Sources')
         self.instructions(t, 'plugin')
         f = ttk.Frame(t); f.pack(fill='x', padx=12, pady=6)
         self.plugins = H.find_plugins()
@@ -358,23 +445,19 @@ class App(tk.Tk):
         ttk.Label(f, text='Drum plugin (VST3)').grid(row=0, column=0, sticky='w')
         self.v_plugin = self.var('plugin', names[0] if names else '')
         ttk.Combobox(f, textvariable=self.v_plugin, values=names, state='readonly', width=50).grid(row=0, column=1, sticky='w')
-        ttk.Label(f, text='Kit name (max 26 letters)').grid(row=1, column=0, sticky='w', pady=4)
-        self.v_kit = self.var('kit', 'My SD3 Kit')
-        e = ttk.Entry(f, textvariable=self.v_kit, width=30); e.grid(row=1, column=1, sticky='w')
-        e.bind('<FocusOut>', lambda ev: self.refresh_project())
         b = ttk.Frame(t); b.pack(fill='x', padx=12, pady=8)
-        ttk.Button(b, text='Load plugin', command=self.do_load).pack(side='left', padx=4)
+        ttk.Button(b, text='Load plugin', style='Accent.TButton', command=self.do_load).pack(side='left', padx=4)
         ttk.Button(b, text='Open plugin window (choose kit)', command=self.do_editor).pack(side='left', padx=4)
         self.btn_restore = ttk.Button(b, text='Use saved kit', command=self.do_restore)
         self.btn_restore.pack(side='left', padx=4)
         self.plugin_info = tk.StringVar(value='No plugin loaded.')
-        ttk.Label(t, textvariable=self.plugin_info, font=('Segoe UI', 10, 'bold')).pack(anchor='w', padx=14, pady=(6, 2))
+        ttk.Label(t, textvariable=self.plugin_info, style='Head.TLabel').pack(anchor='w', padx=14, pady=(6, 2))
         self.loadbar = ttk.Progressbar(t, length=500)
         self.loadbar.pack(anchor='w', padx=14, pady=4)
-        ttk.Label(t, foreground='#555', wraplength=1000, justify='left', text=(
+        T.WrapLabel(t, style='Small.TLabel', text=(
             "About 'Audio Engine Inactive': a plugin only shows that when no audio is flowing. SmartKit now feeds "
             "it silent audio while its window is open, so the message should be gone. It never affects the "
-            "recordings, because audio always flows while SmartKit records.")).pack(anchor='w', padx=14, pady=8)
+            "recordings, because audio always flows while SmartKit records.")).pack(fill='x', anchor='w', padx=14, pady=8)
         if not self.plugins:
             self.plugin_info.set('No VST3 plugins found in ' + ' or '.join(H.VST3_DIRS))
         sf = ttk.LabelFrame(t, text='Sample sources – sounds you already have (no plugin, no recording needed)')
@@ -385,17 +468,173 @@ class App(tk.Tk):
         ttk.Button(sb, text='Add Strike instruments…', command=self.add_sin).pack(side='left', padx=3)
         ttk.Button(sb, text='Add recordings to cut…', command=self.add_long).pack(side='left', padx=3)
         ttk.Button(sb, text='Remove', command=self.remove_source).pack(side='right', padx=3)
-        self.src_list = tk.Listbox(sf, height=6, font=('Segoe UI', 9))
+        self.src_list = T.register(tk.Listbox(sf, height=6, font=T.F['ui']))
         self.src_list.pack(fill='both', expand=True, padx=6, pady=(0, 6))
-        ttk.Label(sf, foreground='#555', wraplength=1000, justify='left', text=(
+        T.WrapLabel(sf, style='Small.TLabel', text=(
             "File names are read the way common drum converters name them ('<drum>_<id> <CODE> <number>v<velocity>', "
             "e.g. Sn, SnR, SnSS, T1, HBC, HEO2, HCH, HSP, Ri1B, C1E), or by their words (kick, snare, rim, tom, hat, "
             "open, pedal, crash, ride, bell, china, splash, choke …). Left/right file pairs become stereo; 44.1/96 kHz "
             "samples are converted to 48 kHz. Check the type and code on tab 2 (right-click a sound).")
-                  ).pack(anchor='w', padx=8, pady=(0, 6))
+                  ).pack(fill='x', anchor='w', padx=8, pady=(0, 6))
+
+    # ---------- kits (= projects)
+    def kit_names(self):
+        try:
+            return sorted((d for d in os.listdir(PROJECTS)
+                           if os.path.isdir(os.path.join(PROJECTS, d)) and not d.startswith('_')), key=str.lower)
+        except OSError:
+            return []
+
+    def fill_kit_list(self):
+        self.kit_box['values'] = self.kit_names()
+
+    def open_kit(self):
+        """A kit picked from the list: save the open one, then open the picked one."""
+        if os.path.normcase(self.project_dir()) == os.path.normcase(getattr(self, 'proj_dir', '') or ''):
+            return
+        if self.busy:
+            self.v_kit.set(os.path.basename(self.proj_dir))
+            messagebox.showinfo('SmartKit', 'Still busy – wait or press Stop.'); return
+        self.save_map()                                  # goes to the kit that was open
+        self.refresh_project(); self.save_settings()
+        self.status.set(f'Opened kit "{self.v_kit.get()}".')
+        self.focus_set()
+
+    def new_kit(self):
+        if self.busy:
+            messagebox.showinfo('SmartKit', 'Still busy – wait or press Stop.'); return
+        name = T.ask_string(self, 'New kit', 'Name of the new kit (max 26 letters):', maxlen=26)
+        if not name: return
+        name = safe_name(name)[:26]
+        self.save_map()
+        self.v_kit.set(name); self.refresh_project(); self.save_settings()
+        self.status.set(f'Kit "{name}" opened.' if self.rows or self.sources else f'New kit "{name}" – add its sounds on step 1.')
+        self.nb.select(0)
+
+    @staticmethod
+    def folder_mb(p):
+        n = 0
+        if os.path.isfile(p):
+            return os.path.getsize(p) / 2 ** 20
+        for root, _d, files in os.walk(p):
+            for f in files:
+                try:
+                    n += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+        return n / 2 ** 20
+
+    def cleanup_project(self):
+        """Free disk space after the kit is built and tested: recordings, test hits, or the whole project."""
+        if self.busy:
+            messagebox.showinfo('SmartKit', 'Still busy – wait or press Stop.'); return
+        self.kit_renamed()
+        p, kit = self.proj_dir, self.v_kit.get()
+        if not os.path.isdir(p):
+            messagebox.showinfo('SmartKit', f'"{kit}" has no project files.'); return
+        out = os.path.join(p, 'output')
+        rec = [os.path.join(p, 'renders')]
+        tst = [os.path.join(p, x) for x in ('probe', '_preview.wav')]
+        mb = lambda paths: sum(self.folder_mb(x) for x in paths if os.path.exists(x))
+        all_mb, rec_mb, tst_mb, out_mb = self.folder_mb(p), mb(rec), mb(tst), mb([out])
+        def inside(child, parent):
+            try:
+                c, q = os.path.normcase(os.path.abspath(child)), os.path.normcase(os.path.abspath(parent))
+                return os.path.commonpath([c, q]) == q
+            except ValueError:                                # different drives
+                return False
+        if not inside(p, PROJECTS) or os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(PROJECTS)):
+            messagebox.showerror('SmartKit', f'Not cleaning {p}: it is not a kit folder inside Projects.'); return
+        out_used = inside(self.v_out.get().strip() or out, p)
+
+        d = T.Dialog(self, 'Clean up project files')
+        ttk.Label(d.body, text=f'Project files of "{kit}"  –  {all_mb:,.0f} MB', style='Title.TLabel').pack(anchor='w')
+        T.WrapLabel(d.body, style='Help.TLabel', wraplength=470, text=(
+            'Test the kit on the module first. These files are only needed to change the kit and build it again. '
+            'The SD card, your sample folders and the plugin are not touched. Files go to the Recycle Bin.')
+                    ).pack(fill='x', anchor='w', pady=(4, 12))
+        opts = []
+
+        def opt(text, sub, paths, size, on):
+            v = tk.BooleanVar(value=on and size > 0)
+            f = ttk.Frame(d.body); f.pack(fill='x', anchor='w', pady=3)
+            c = ttk.Checkbutton(f, text=f'{text}  –  {size:,.0f} MB', variable=v); c.pack(anchor='w')
+            if size <= 0 and paths: c.state(['disabled'])
+            ttk.Label(f, text=sub, style='Small.TLabel').pack(anchor='w', padx=(26, 0))
+            opts.append((v, paths)); return v
+        v_rec = opt('Plugin recordings', 'Rebuilding with other settings would need the sounds recorded again.',
+                    rec, rec_mb, True)
+        v_tst = opt('Test hits from Find sounds', 'Made again by pressing Find sounds.', tst, tst_mb, True)
+        v_out = None
+        if out_mb > 0:
+            v_out = opt('Kit built into the project folder (output)',
+                        'Only if you copied it to the SD card already.', [out], out_mb, False)
+        v_all = opt('The whole project', 'Sound list, pad choices, saved plugin kit and log – the kit leaves the '
+                    'kit list. Presets and settings files stay.', [p], all_mb, False)
+
+        def sync(*_):                                    # 'whole project' includes the others
+            for v, _p in opts[:-1]:
+                if v_all.get(): v.set(True)
+        v_all.trace_add('write', sync)
+        d.button('Move to Recycle Bin', lambda: d.ok(True), accent=True)
+        d.button('Cancel', d.cancel)
+        if not d.show():
+            return
+        paths = [p] if v_all.get() else [x for v, ps in opts[:-1] if v.get() for x in ps]
+        if not paths:
+            return
+        if v_all.get() and out_used and out_mb > 0 and not messagebox.askyesno(
+                'SmartKit', 'The built kit is inside this project folder and goes too. Continue?'):
+            return
+        freed = mb(paths)
+        try:
+            T.to_recycle_bin(paths)
+        except OSError as e:
+            messagebox.showerror('SmartKit', str(e)); return
+        if v_all.get():
+            self.rows, self.layout, self.sources = {}, [], []
+            self.proj_dir = None
+        self.refresh_project()
+        self.status.set(f'Moved {freed:,.0f} MB of project files of "{kit}" to the Recycle Bin.')
+
+    def kit_renamed(self):
+        """The kit name is also the project folder. A new name renames the project (sounds, sources and
+        recordings stay); a name that already has a project asks whether to open that one instead."""
+        new, old = self.project_dir(), getattr(self, 'proj_dir', None)
+        if old is None or os.path.normcase(new) == os.path.normcase(old):
+            return
+        self.save_map()                                  # unsaved changes go to the kit that was open
+        has = lambda d: any(os.path.exists(os.path.join(d, f)) for f in ('sounds.json', 'plugin_state.bin'))
+        if not (self.rows or self.sources) or not has(old):
+            self.refresh_project(); return               # nothing to carry over
+        if has(new):
+            a = messagebox.askyesnocancel('SmartKit', f'There is already a project called "{os.path.basename(new)}".\n\n'
+                                          'Yes = open that project (its own sounds)\n'
+                                          f'No = keep the sounds you have now and use them for "{os.path.basename(new)}" '
+                                          '(its saved sound list is replaced)\nCancel = keep the old name')
+            if a is None:
+                self.v_kit.set(os.path.basename(old)); return
+            if a:
+                self.refresh_project(); return
+            self.proj_dir = new; self.save_map()
+            self.status.set(f'Sounds kept for "{os.path.basename(new)}".'); return
+        try:
+            if os.path.isdir(new):                       # e.g. only a log file there: move the project in
+                import shutil
+                for f in os.listdir(old):
+                    if not os.path.exists(os.path.join(new, f)):
+                        shutil.move(os.path.join(old, f), os.path.join(new, f))
+            else:
+                os.rename(old, new)                      # move everything: sounds, sources, recordings, log
+            self.proj_dir = new
+            self.status.set(f'Kit renamed – sounds and recordings kept ("{os.path.basename(new)}").')
+        except OSError:
+            self.proj_dir = new; self.save_map()        # folder in use: copy the sound list at least
+            self.status.set(f'Kit renamed – sounds kept ("{os.path.basename(new)}").')
 
     def refresh_project(self):
         p = self.project_dir()
+        self.proj_dir = p
         self.btn_restore.state(['!disabled'] if os.path.exists(os.path.join(p, 'plugin_state.bin')) else ['disabled'])
         self.rows, self.layout, self.sources = {}, [], []
         mp = os.path.join(p, 'sounds.json')
@@ -746,12 +985,14 @@ class App(tk.Tk):
     def tab_sounds(self, nb):
         t = ttk.Frame(nb); nb.add(t, text='2 · Find sounds')
         self.instructions(t, 'sounds')
-        b = ttk.Frame(t); b.pack(fill='x', padx=8)
-        ttk.Button(b, text='Find sounds', command=self.do_probe).pack(side='left', padx=3)
+        b = ttk.Frame(t); b.pack(fill='x', padx=12)
+        ttk.Button(b, text='Find sounds', style='Accent.TButton', command=self.do_probe).pack(side='left', padx=3)
         ttk.Label(b, text='notes (other plugins)').pack(side='left', padx=(8, 2))
         self.v_notes = self.var('notes', '0-127')
         ttk.Entry(b, textvariable=self.v_notes, width=9).pack(side='left')
         ttk.Button(b, text='▶ Play', command=self.play_sel).pack(side='left', padx=(12, 3))
+        ttk.Button(b, text='Stop', command=self.stop).pack(side='right', padx=3)
+        b = ttk.Frame(t); b.pack(fill='x', padx=12, pady=(6, 0))
         ttk.Button(b, text='Suggest pads', command=self.auto_pads).pack(side='left', padx=3)
         ttk.Button(b, text='Save preset…', command=self.save_preset).pack(side='left', padx=3)
         ttk.Button(b, text='Load preset…', command=self.load_preset).pack(side='left', padx=3)
@@ -760,19 +1001,16 @@ class App(tk.Tk):
         self.v_inst_only = tk.StringVar(value=self.st.get('inst_only', '0'))
         ttk.Checkbutton(b, text='Instruments only (no pads – assign them on the module)', variable=self.v_inst_only,
                         onvalue='1', offvalue='0', command=self.save_settings).pack(side='left', padx=12)
-        ttk.Button(b, text='Stop', command=self.stop).pack(side='right', padx=3)
-        self.pbar = ttk.Progressbar(t); self.pbar.pack(fill='x', padx=8, pady=4)
+        self.pbar = ttk.Progressbar(t); self.pbar.pack(fill='x', padx=12, pady=(8, 4))
         cols = ('use', 'full', 'name', 'type', 'pads', 'ring', 'level', 'notes')
         tr = ttk.Treeview(t, columns=cols, show='tree headings', height=18)
         tr.column('#0', width=170, stretch=False); tr.heading('#0', text='instrument')
-        for c, w, txt in [('use', 40, 'use'), ('full', 330, 'sound (plugin or samples)'), ('name', 200, 'Strike instrument name'),
+        for c, w, txt in [('use', 40, 'use'), ('full', 330, 'sound (plugin or samples) – double-click to play'), ('name', 200, 'Strike instrument name'),
                           ('type', 70, 'type'), ('pads', 150, 'Strike pad(s)'), ('ring', 55, 'rings s'),
                           ('level', 60, 'level dB'), ('notes', 80, 'MIDI notes')]:
             tr.heading(c, text=txt); tr.column(c, width=w, anchor='w', stretch=(c in ('full', 'name', 'pads')))
         ysb = ttk.Scrollbar(t, orient='vertical', command=tr.yview); tr.configure(yscrollcommand=ysb.set)
-        ysb.pack(side='right', fill='y', padx=(0, 8)); tr.pack(fill='both', expand=True, padx=(8, 0), pady=4)
-        tr.tag_configure('off', foreground='#999')
-        tr.tag_configure('group', font=('Segoe UI', 9, 'bold'))
+        ysb.pack(side='right', fill='y', padx=(0, 12), pady=(4, 12)); tr.pack(fill='both', expand=True, padx=(12, 0), pady=(4, 12))
         tr.bind('<Button-1>', self.on_click)
         tr.bind('<Double-1>', self.on_double)
         tr.bind('<Button-3>', self.on_right)
@@ -868,6 +1106,7 @@ class App(tk.Tk):
             tr.insert(groups[g], 'end', iid=key, text='', values=self.row_values(r), tags=() if r['use'] else ('off',))
         for g, gid in groups.items():
             self.update_group(gid)
+        self.kit_summary()
 
     def row_values(self, r):
         star = lambda f: '*' if f in r.get('auto', []) else ''
@@ -881,6 +1120,12 @@ class App(tk.Tk):
         on = sum(self.rows[k]['use'] for k in kids)
         mark = '☑' if on == len(kids) else ('☐' if on == 0 else '◪')
         self.tree.item(gid, values=(mark, '', f'{on} of {len(kids)} used', '', '', '', ''))
+        self.kit_summary()
+
+    def kit_summary(self):
+        if not hasattr(self, 'kit_tip'): return
+        n = len(self.used_rows())
+        self.kit_tip.configure(text=f'{n} sound{"s" * (n != 1)} in the kit' if self.rows else 'no sounds yet')
 
     def refresh_row(self, key):
         r = self.rows[key]
@@ -889,9 +1134,10 @@ class App(tk.Tk):
 
     def save_map(self):
         if not self.rows and not self.sources: return
-        os.makedirs(self.project_dir(), exist_ok=True)
+        d = getattr(self, 'proj_dir', None) or self.project_dir()     # the open project (also while renaming)
+        os.makedirs(d, exist_ok=True)
         json.dump({'rows': self.rows, 'layout': self.layout, 'sources': self.sources},
-                  open(os.path.join(self.project_dir(), 'sounds.json'), 'w'), indent=1)
+                  open(os.path.join(d, 'sounds.json'), 'w'), indent=1)
 
     def set_all_use(self, on):
         for k in self.rows: self.rows[k]['use'] = on
@@ -946,21 +1192,21 @@ class App(tk.Tk):
         elif c == 'name':
             self.edit_name(iid, col)
         else:
-            m = tk.Menu(self, tearoff=0)
+            m = T.Menu(self)
             m.add_command(label='▶ Play', command=lambda: self.play_key(iid))
             m.add_command(label='Rename…', command=lambda: self.edit_name(iid, '#3'))
-            tm = tk.Menu(m, tearoff=0)
+            tm = T.Menu(m)
             for r in ROLES:
                 tm.add_command(label=r, command=lambda r=r: self.set_field(iid, 'role', r))
             m.add_cascade(label='Type', menu=tm)
             if self.rows[iid].get('src'):
-                cm = tk.Menu(m, tearoff=0)
+                cm = T.Menu(m)
                 for grp, codes in (('Kick / snare / tom', ['KCKHD', 'SNRHD', 'SNRRI', 'SNRRO', 'SNRXS', 'SNRFL', 'SNROF', 'TOMHD', 'TOMRI']),
                                    ('Hi-hat', ['HHBCL', 'HHBTT', 'HHBO1', 'HHBO2', 'HHBO3', 'HHBO4', 'HHBO5', 'HHECL', 'HHETT',
                                                'HHEO1', 'HHEO2', 'HHEO3', 'HHEO4', 'HHEO5', 'HHPCL', 'HHPSP']),
                                    ('Cymbals', ['CRSED', 'CRSBW', 'CRSBL', 'CRSCH', 'RIDBW', 'RIDBL', 'RIDED', 'SPLED', 'SPLCH',
                                                 'CHNED', 'STKED', 'PRCHT', 'PRCCB'])):
-                    sm = tk.Menu(cm, tearoff=0)
+                    sm = T.Menu(cm)
                     for c in codes:
                         sm.add_command(label=f'{c}  {SRC.describe(c)[1]}', command=lambda c=c: self.set_code(iid, c))
                     cm.add_cascade(label=grp, menu=sm)
@@ -1009,7 +1255,7 @@ class App(tk.Tk):
 
     def pad_menu(self, key, e):
         r = self.rows[key]
-        m = tk.Menu(self, tearoff=0)
+        m = T.Menu(self)
         vs = {}
 
         def toggle(p, combine=False):
@@ -1028,7 +1274,7 @@ class App(tk.Tk):
                             if 'pads' in o.get('auto', []): o['auto'].remove('pads')
                             self.refresh_row(k)
             self.set_field(key, 'pads', pads)
-        cm = tk.Menu(m, tearoff=0)
+        cm = T.Menu(m)
         for p in PADS:
             vs[p] = tk.BooleanVar(value=p in r['pads'])
             others = [o['name'] for k, o in self.rows.items() if k != key and p in o['pads']]
@@ -1037,7 +1283,7 @@ class App(tk.Tk):
             if others and p not in r['pads']:
                 cm.add_command(label=f'{p}  {PAD_NAMES[p]}  together with {", ".join(others)[:40]}',
                                command=lambda p=p: toggle(p, combine=True))
-        hm = tk.Menu(m, tearoff=0)
+        hm = T.Menu(m)
         for p in HAT_SLOTS:
             vs[p] = tk.BooleanVar(value=p in r['pads'])
             hm.add_checkbutton(label=f'{HAT_SLOT_NAMES[p[:3]]} – {p[4:]}', variable=vs[p], command=lambda p=p: toggle(p))
@@ -1177,7 +1423,7 @@ class App(tk.Tk):
 
     # ============================================================ tab 3: settings
     def tab_settings(self, nb):
-        t = ttk.Frame(nb); nb.add(t, text='3 · Settings')
+        t = self.page(nb, '3 · Settings')
         self.instructions(t, 'settings')
         top = ttk.Frame(t); top.pack(fill='x', padx=12, pady=6)
         f = ttk.Frame(top); f.pack(side='top', anchor='w')
@@ -1220,9 +1466,9 @@ class App(tk.Tk):
     def memory_panel(self, parent):
         mf = ttk.LabelFrame(parent, text='Memory planner – per type of drum')
         mf.pack(side='top', anchor='w', pady=(10, 0), fill='x')
-        ttk.Label(mf, text='type', font=('Segoe UI', 9, 'bold')).grid(row=0, column=0, sticky='w', padx=6)
-        ttk.Label(mf, text='priority 0–10', font=('Segoe UI', 9, 'bold')).grid(row=0, column=1, sticky='w', padx=6)
-        ttk.Label(mf, text='stereo', font=('Segoe UI', 9, 'bold')).grid(row=0, column=2, sticky='w', padx=6)
+        ttk.Label(mf, text='type', style='Small.TLabel').grid(row=0, column=0, sticky='w', padx=6)
+        ttk.Label(mf, text='priority 0–10', style='Small.TLabel').grid(row=0, column=1, sticky='w', padx=6)
+        ttk.Label(mf, text='stereo', style='Small.TLabel').grid(row=0, column=2, sticky='w', padx=6)
         prio, ster = self.st.get('priority', {}), self.st.get('stereo_by_type', {})
         self.v_prio, self.v_ster = {}, {}
         for i, r in enumerate(ROLES, 1):
@@ -1233,8 +1479,9 @@ class App(tk.Tk):
             ttk.Combobox(mf, textvariable=self.v_ster[r], values=STEREO_MODES, state='readonly', width=14
                          ).grid(row=i, column=2, sticky='w', padx=6, pady=1)
         ttk.Button(mf, text='Defaults', command=self.memory_defaults).grid(row=len(ROLES) + 1, column=0, sticky='w', padx=6, pady=4)
-        ttk.Label(mf, text=MEMORY_HELP, wraplength=540, justify='left', foreground='#444'
-                  ).grid(row=1, column=3, rowspan=len(ROLES) + 1, sticky='nw', padx=(10, 6))
+        mf.columnconfigure(3, weight=1)
+        T.WrapLabel(mf, text=MEMORY_HELP, style='Small.TLabel'
+                    ).grid(row=1, column=3, rowspan=len(ROLES) + 1, sticky='new', padx=(16, 6))
 
     def memory_defaults(self):
         for r in ROLES:
@@ -1282,13 +1529,13 @@ class App(tk.Tk):
 
     # ============================================================ tab 4: Strike settings
     def tab_strike(self, nb):
-        t = ttk.Frame(nb); nb.add(t, text='4 · Strike settings')
+        t = self.page(nb, '4 · Strike settings')
         self.instructions(t, 'strike')
         lf = ttk.LabelFrame(t, text='Instrument / pad settings per type of drum')
         lf.pack(fill='x', padx=12, pady=6)
-        ttk.Label(lf, text='type', font=('Segoe UI', 9, 'bold')).grid(row=0, column=0, sticky='w', padx=4)
+        ttk.Label(lf, text='type', style='Small.TLabel').grid(row=0, column=0, sticky='w', padx=4)
         for j, (k, title, *_r) in enumerate(LAYER_COLS, 1):
-            ttk.Label(lf, text=title, font=('Segoe UI', 9, 'bold')).grid(row=0, column=j, padx=2)
+            ttk.Label(lf, text=title, style='Small.TLabel').grid(row=0, column=j, padx=2)
         saved = self.st.get('layer', {})
         self.v_layer = {}
         for i, r in enumerate(ROLES, 1):
@@ -1300,8 +1547,8 @@ class App(tk.Tk):
                 ttk.Spinbox(lf, from_=lo, to=hi, width=4, textvariable=v).grid(row=i, column=j, padx=1, pady=1)
         bb = ttk.Frame(lf); bb.grid(row=len(ROLES) + 1, column=0, columnspan=len(LAYER_COLS) + 1, sticky='w', pady=4)
         ttk.Button(bb, text='Defaults', command=self.strike_defaults).pack(side='left', padx=4)
-        ttk.Label(lf, text=STRIKE_HELP, wraplength=1000, justify='left', foreground='#444'
-                  ).grid(row=len(ROLES) + 2, column=0, columnspan=len(LAYER_COLS) + 1, sticky='w', padx=4, pady=(0, 4))
+        T.WrapLabel(lf, text=STRIKE_HELP, style='Small.TLabel'
+                    ).grid(row=len(ROLES) + 2, column=0, columnspan=len(LAYER_COLS) + 1, sticky='ew', padx=4, pady=(0, 4))
 
         ff = ttk.LabelFrame(t, text='Kit effects')
         ff.pack(fill='x', padx=12, pady=6)
@@ -1333,7 +1580,7 @@ class App(tk.Tk):
                 c += 1
         ttk.Label(ff, text='FX1 / FX2 (delays, chorus …) are switched off. MIDI notes sent by each pad = the '
                            "plugin's note for the sound on it (hi-hat 8 / 7 / 22 like the factory kits).",
-                  foreground='#444').grid(row=len(rows), column=0, columnspan=12, sticky='w', padx=4, pady=4)
+                  style='Small.TLabel').grid(row=len(rows), column=0, columnspan=12, sticky='w', padx=4, pady=4)
 
     def strike_defaults(self):
         for r in ROLES:
@@ -1379,23 +1626,37 @@ class App(tk.Tk):
     def tab_build(self, nb):
         t = ttk.Frame(nb); nb.add(t, text='5 · Record & build')
         self.instructions(t, 'build')
-        b = ttk.Frame(t); b.pack(fill='x', padx=8)
+        b = ttk.Frame(t); b.pack(fill='x', padx=12)
         self.v_redo = tk.IntVar(value=0)
-        ttk.Button(b, text='● Record sounds', command=self.do_record).pack(side='left', padx=4)
-        ttk.Checkbutton(b, text='re-record sounds already recorded', variable=self.v_redo).pack(side='left', padx=4)
-        ttk.Button(b, text='Build kit', command=self.do_build).pack(side='left', padx=16)
+        ttk.Button(b, text='●  Record + build', style='Accent.TButton', command=self.do_record_build).pack(side='left', padx=4)
+        ttk.Button(b, text='Record sounds', command=self.do_record).pack(side='left', padx=(12, 4))
+        ttk.Button(b, text='Build kit', command=self.do_build).pack(side='left', padx=4)
+        ttk.Checkbutton(b, text='re-record sounds already recorded', variable=self.v_redo).pack(side='left', padx=12)
         ttk.Button(b, text='Stop', command=self.stop).pack(side='left', padx=4)
+        ttk.Button(b, text='Clean up…', command=self.cleanup_project).pack(side='right', padx=(6, 0))
         ttk.Button(b, text='Open output folder',
                    command=lambda: os.startfile(self.v_out.get() or os.path.join(self.project_dir(), 'output'))).pack(side='right')
-        self.pbar2 = ttk.Progressbar(t); self.pbar2.pack(fill='x', padx=8, pady=4)
-        self.logbox = tk.Text(t, font=('Consolas', 9), height=22)
-        self.logbox.pack(fill='both', expand=True, padx=8, pady=4)
+        self.pbar2 = ttk.Progressbar(t); self.pbar2.pack(fill='x', padx=12, pady=(8, 4))
+        lf = ttk.Frame(t); lf.pack(fill='both', expand=True, padx=12, pady=(4, 12))
+        self.logbox = T.register(tk.Text(lf, font=T.F['mono'], height=22, wrap='word'))
+        lsb = ttk.Scrollbar(lf, orient='vertical', command=self.logbox.yview); self.logbox.configure(yscrollcommand=lsb.set)
+        lsb.pack(side='right', fill='y'); self.logbox.pack(side='left', fill='both', expand=True)
 
     def render_dir(self, r):
-        return os.path.join(self.project_dir(), 'renders', r['key'])
+        return os.path.join((getattr(self, 'proj_dir', None) or self.project_dir()), 'renders', r['key'])
 
-    def do_record(self):
+    def do_record_build(self):
+        """Record the plugin sounds that still need it, then build the kit – all questions are asked first,
+        so nothing waits for an OK after the recording."""
+        if not self.build_preflight():
+            return
+        self.do_record(then=lambda: self.do_build(confirmed=True))
+
+    def do_record(self, then=None):
+        self.kit_renamed()
         rows = [r for r in self.used_rows() if not r.get('src')]
+        if not rows and then:                    # only sample sounds: nothing to record
+            then(); return
         if not rows:
             messagebox.showinfo('SmartKit', 'Nothing to record: no plugin sounds with a Strike pad are switched on in '
                                             'tab 2. (Sample sounds need no recording – press Build kit.)'); return
@@ -1408,6 +1669,9 @@ class App(tk.Tk):
             except Exception:
                 return None
         todo = [r for r in rows if redo or not os.path.isdir(self.render_dir(r)) or note_of(r) != int(r['note'])]
+        if not todo and then:                    # everything recorded already
+            self.log('All plugin sounds are recorded already – building.')
+            then(); return
         total = max(1, len(todo) * len(vels) * reps)
 
         def job():
@@ -1429,7 +1693,10 @@ class App(tk.Tk):
             return True
 
         def rec_done(ok):
-            if ok:
+            if ok and then:
+                self.status.set('✔ Recording finished – building the kit …')
+                self.after(200, then)
+            elif ok:
                 self.status.set('✔ Recording finished – press Build kit.')
                 self.notify('Recording finished', '✔ All sounds are recorded.\n\nNext: press Build kit.')
         self.run_bg(job, rec_done, 'Recording …')
@@ -1445,15 +1712,29 @@ class App(tk.Tk):
                if len({x['key'].split('_')[0] for x in rs}) > 1]
         return '\n'.join(bad)
 
-    def do_build(self):
+    def build_preflight(self):
+        """The questions before a build (nothing to build, mixed pads, writing to the card). True = go ahead."""
+        self.kit_renamed()
         rows = self.used_rows()
+        if not rows:
+            ticked = sum(1 for r in self.rows.values() if r['use'])
+            messagebox.showinfo('SmartKit', 'Nothing to build: ' + (
+                'no sounds are listed for this kit. Add a sample folder on tab 1 or press Find sounds on tab 2.'
+                if not self.rows else
+                'no sounds are switched on on tab 2.' if not ticked else
+                f'{ticked} sounds are switched on, but none has a Strike pad. Give them pads on tab 2 '
+                '(Suggest pads), or tick "Instruments only".'))
+            self.nb.select(1 if self.rows else 0); return False
         out = self.v_out.get().strip() or os.path.join(self.project_dir(), 'output')
+        if levelcal.card_root(out) != os.path.normpath(out):     # E:\Kits picked instead of the card itself
+            self.v_out.set(levelcal.card_root(out)); out = self.v_out.get()
+            self.log(f'Output folder set to {out} (the folder that holds Kits / Instruments / Samples).')
         kit = safe_name(self.v_kit.get())[:26]
         mixed = '' if self.inst_only() else self.check_pads(rows)
         if mixed and not messagebox.askyesno('SmartKit', 'These pads have sounds from different drums on them, which '
                                              'would be mixed into one instrument:\n\n' + mixed +
                                              '\n\nBuild anyway? (No = go back and fix the pads on tab 2)'):
-            self.nb.select(1); return
+            self.nb.select(1); return False
         if len(out.rstrip('\\/')) <= 2:
             fold = {FOLDER_MODES[0]: f'"{kit} KICKS", "{kit} SNARES" … folders in Instruments',
                     FOLDER_MODES[1]: f'a "{kit}" folder in Instruments',
@@ -1462,7 +1743,15 @@ class App(tk.Tk):
                     FOLDER_NESTED: f'a "{kit}" folder in Instruments with CRASH, SNARE, HIHAT … inside'}.get(self.v_folders.get(), '')
             if not messagebox.askyesno('SmartKit', f'Write the kit straight to {out}?\n\nFiles added: Kits\\{kit}.skt, '
                                                    f'{fold}, and a "{kit}" folder in Samples.'):
-                return
+                return False
+        return True
+
+    def do_build(self, confirmed=False):
+        if not confirmed and not self.build_preflight():
+            return
+        rows = self.used_rows()
+        out = self.v_out.get().strip() or os.path.join(self.project_dir(), 'output')
+        kit = safe_name(self.v_kit.get())[:26]
         self.save_settings(); self.save_map()
         self.log(f"\n===== Build {time.strftime('%Y-%m-%d %H:%M')} – SmartKit {VERSION} =====")
         layered = self.v_combine.get() == COMBINE_MODES[1]
@@ -1471,7 +1760,7 @@ class App(tk.Tk):
                                      vel_level=0, hat_closed_from=int(self.v_hat.get() or 127),
                                      gain=self.v_gain.get(), include_all=False, auto_pads=False, pads_b={},
                                      extras=[], extra_mb=float(self.v_extra_mb.get() or 0),
-                                     levels='instrument' if self.v_levels.get() == LEVEL_MODES[1] else 'kit',
+                                     levels={LEVEL_MODES[1]: 'instrument', LEVEL_MODES[2]: 'mix'}.get(self.v_levels.get(), 'kit'),
                                      fill_empty=self.v_fill_empty.get().startswith('play'),
                                      folders={FOLDER_MODES[0]: 'type', FOLDER_MODES[1]: 'kit',
                                               FOLDER_MODES[2]: 'shared', FOLDER_NESTED: 'nested',
@@ -1572,7 +1861,8 @@ class App(tk.Tk):
                     a = make(r['name'], r['role'], [r['key']])
                     if a: opts.extras.append(a)
             if not artics and not opts.extras:
-                self.log('Nothing recorded yet.'); return None
+                self.log('Nothing to build: the plugin sounds are not recorded yet (press Record sounds) and no '
+                         'sample sound could be read.'); return None
             return SK.build_kit(artics, pads, opts, log=self.log)
 
         def done(summary):
@@ -1582,8 +1872,11 @@ class App(tk.Tk):
                     self.log(f"Also saved {len(summary['extras'])} instrument(s) that are not in the kit: "
                              + ', '.join(summary['extras']))
                 self.status.set(f"✔ Done – kit built ({summary['used_mib']} MB)")
+                rec = self.folder_mb(os.path.join(self.proj_dir, 'renders'))
+                tip = (f"\n\nAfter testing it on the module you can free {rec:,.0f} MB of recordings: "
+                       "File → Clean up this kit's project files." if rec >= 1 else '')
                 self.notify('Kit finished', f"✔ The kit is built ({summary['used_mib']} MB of "
-                                            f"{summary['budget_mib']} MB).\n\nFiles are in {out}")
+                                            f"{summary['budget_mib']} MB).\n\nFiles are in {out}" + tip)
             else:
                 self.status.set('Build stopped – see the log.')
         self.run_bg(job, done, 'Building the kit …')

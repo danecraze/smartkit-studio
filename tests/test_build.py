@@ -57,6 +57,36 @@ def test_build_kit_from_samples(converter_library, tmp_path):
     assert any('/SNARE/SNRHD_' in p for p in kit['paths'])          # Instruments/<kit>/<TYPE>/<CODE_name>
 
 
+def test_mix_levels_on_pads(converter_library, tmp_path):
+    """'mix' mode: instruments at full level, the loudest one at pad Level 99, quieter ones lower."""
+    import levelcal
+    snds = sources.scan_any(converter_library, log=lambda *a: None)
+    pick = {'KCKHD': 'K1H', 'SNRHD': 'S1H', 'CRSED': 'C1E'}
+    artics, pads = [], {}
+    for s in snds:
+        if s['sfx'] in pick:
+            hits = sources.load_hits(s['src'])
+            if s['sfx'] == 'CRSED':
+                for h in hits:                                  # make the crash 12 dB quieter than the rest
+                    h.a = h.a * 0.25; h.peak *= 0.25
+            a = Artic(sources.sd3names.fit(s['base'], s['sfx']), '', hits)
+            a.role, a.n_raw, a.src_bytes = s['role'], len(hits), sources.source_bytes(s['src'])
+            artics.append(a); pads[pick[s['sfx']]] = a
+    curve = {99: 0.0, 90: -3.6, 80: -7.6, 70: -11.6, 60: -15.6, 50: -19.6, 40: -23.6, 30: -27.6, 20: -31.6}
+    out = str(tmp_path / 'card')
+    SK.build_kit(artics, pads, opts(out, levels='mix', level_curve=curve), log=lambda *a: None)
+    kit = SF.read_skt(open(glob.glob(os.path.join(out, 'Kits', '*.skt'))[0], 'rb').read())
+    lv = {pid: d[6] for pid, (ia, ib, d) in kit['pads'].items() if ia != 0xFFFF}
+    assert max(lv.values()) == 90
+    assert lv['C1E'] < lv['S1H']
+    pk = {pid: max(h.peak for h in a.hits) for pid, a in pads.items()}
+    for pid in pk:                                                  # each pad turned down by its distance to the loudest
+        want = 20 * np.log10(pk[pid] / max(pk.values()))
+        got = levelcal.db_for_level(curve, lv[pid]) - levelcal.db_for_level(curve, 90)
+        assert abs(got - want) < 0.5, (pid, lv[pid], want)
+    assert levelcal.level_for_db(curve, -3.6) == 90 and levelcal.level_for_db(None, 0) == 99
+
+
 def test_compressed_sound_gets_hard_layers():
     """Loudness flat above velocity 51 (like a squashed plugin snare): ~1/3 of the layers go to the hard hits."""
     from analyse import measure
@@ -100,3 +130,40 @@ def test_sampler_files(tmp_path, kind):
     assert len(hits) == 2
     if kind == 'sfz':
         assert all(h.a.shape[1] == 2 for h in hits)                 # close mic + stereo overhead mixed
+
+
+def test_level_test_kit_goes_to_card_root(tmp_path):
+    """Picking the card's Kits folder must still put the files in Kits / Instruments / Samples of the card."""
+    import levelcal
+    card = tmp_path / 'card'
+    for d in ('Kits', 'Instruments', 'Samples'):
+        (card / d).mkdir(parents=True)
+    tpl = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'template.skt')
+    levelcal.build_test_kit(str(card / 'Kits'), tpl)
+    kit = SF.read_skt(open(card / 'Kits' / f'{levelcal.KIT}.skt', 'rb').read())
+    assert kit['paths'] == [f':{levelcal.KIT}/LEVEL TONE.sin']
+    sin = SF.read_sin(open(card / 'Instruments' / levelcal.KIT / 'LEVEL TONE.sin', 'rb').read())
+    assert sin['paths'] == [f':{levelcal.KIT}/LEVEL TONE.wav']
+    assert (card / 'Samples' / levelcal.KIT / 'LEVEL TONE.wav').exists()
+    assert not (card / 'Kits' / 'Kits').exists()
+
+
+def test_level_analysis_and_builtin_curve(tmp_path):
+    """analyse() reads the 12 steps of a test-kit recording; the built-in curve maps dB to Levels."""
+    import levelcal
+    from analyse import write_wav16
+    sr, true = 48000, {L: -0.4 * (99 - L) for L in levelcal.LEVELS}
+    t = np.arange(int(sr * levelcal.TONE_S)) / sr
+    tone = 0.25 * np.sin(2 * np.pi * 997 * t)
+    rng = np.random.default_rng(1)
+    parts = [rng.normal(0, 3e-5, sr)]
+    for L in levelcal.LEVELS:
+        for _ in range(levelcal.REPEATS):
+            parts += [tone * 10 ** (true[L] / 20), rng.normal(0, 3e-5, sr)]
+    sig = np.concatenate(parts)
+    p = str(tmp_path / 'rec.wav'); write_wav16(p, np.stack([sig, sig], 1), sr)
+    curve, rep = levelcal.analyse(p)
+    for L in levelcal.LEVELS:
+        assert abs(curve[L] - true[L]) < 0.2, (L, curve[L], true[L])
+    assert levelcal.level_for_db(None, -4.33) == 90 and levelcal.level_for_db(None, -19.87) == 50
+    assert levelcal.level_for_db(None, 0) == 99 and levelcal.level_for_db(None, -60) == 1

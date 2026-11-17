@@ -89,6 +89,16 @@ Compressor types in order: Master 1, Radio 1, Radio 2, Soft Hyper, Bright, Count
 Jazz, Lo Boost, Rock 1, Rock 2, Rock 3. Each type only sets an attack and a release time (the ratio is the
 same for all).
 
+## Pad Level → loudness
+
+Measured on a Strike Pro (firmware 1.5) with a steady tone, velocity → level off, no effects (dB below Level 99):
+
+| Level | 95 | 90 | 85 | 80 | 75 | 70 | 60 | 50 | 40 | 30 | 20 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| dB | −2.5 | −4.3 | −5.6 | −7.5 | −10.3 | −12.1 | −15.9 | −19.9 | −23.8 | −28.4 | −34.7 |
+
+About 0.4 dB per step in the middle, steeper at the top and bottom.
+
 ## Sample memory
 
 The firmware loads every sample of a kit into one 200 MiB pool. Each sample takes its PCM bytes plus 64 frames

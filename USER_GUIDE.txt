@@ -91,8 +91,23 @@ START: double-click "SmartKit Studio.bat"
 File menu        Open preset / Save preset (Ctrl+O / Ctrl+S), Save settings / Load settings
                  (all of tabs 3 and 4, in the Settings folder), open the project folder, the log
                  file or the output folder, Close.
+View menu        Dark (default) or Light. Click WHAT TO DO at the top of a step to hide or show
+                 the help text. Put an icon.ico (or icon.png) next to the program to use your own
+                 window icon.
+Kit (top right)  Everything belongs to the kit shown in the header (its project folder is
+                 Projects\<kit>). Type a new name to rename the kit (sounds and recordings stay),
+                 pick another kit from the list to open it, File → New kit for an empty one.
+Levels           Step 3. "Kit pads keep the plugin's mix": every instrument is at full level and
+                 the kit pads are turned down to the plugin's balance (loudest = Level 90, using
+                 the Strike's Level curve measured on the module); the Level column on step 4 is
+                 then only used for the instruments' own defaults.
+Clean up         File → Clean up this kit's project files (or Clean up… on step 5). Test the kit on
+                 the module first, then move the plugin recordings (the big part), the Find-sounds
+                 test hits, a kit built into the project folder or the whole project to the
+                 Recycle Bin. The SD card, sample folders and presets are never touched.
 4 Strike settings  Per type of drum: level, pan, decay, pitch (semi/fine), filter cutoff,
                  velocity to level/decay/filter/pitch, velocity low/high, reverb send. Kit effects:
                  kit level, reverb, compressor, EQ (FX1/FX2 off). Pads send the plugin's MIDI note.
-5 Record & build Record (plugin sounds only), then Build kit (output folder or the SD card).
+5 Record & build Record + build does both; or Record (plugin sounds only), then Build kit (output
+                 folder or the SD card).
                  Everything in the log is also saved to Projects\<kit>\log.txt.
