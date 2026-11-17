@@ -10,6 +10,19 @@ folder of drum samples into a ready-to-play kit for the Alesis Strike / Strike P
 > Not affiliated with, endorsed by or supported by Alesis, inMusic or Toontrack.
 > See [Disclaimer](#disclaimer).
 
+![SmartKit Studio – choosing the sounds and their Strike pads](docs/images/02-find-sounds.png)
+
+## Screenshots
+
+| | |
+|---|---|
+| **1 · Sources** – load the drum plugin or add sample folders, SFZ, Decent Sampler, Hydrogen or Strike instruments | **2 · Find sounds** – every drum and articulation with its Strike name, type and pads (double-click to play) |
+| ![Sources](docs/images/01-sources.png) | ![Find sounds](docs/images/02-find-sounds.png) |
+| **3 · Settings** – recording, memory planner, levels, folders, output (SD card) | **4 · Strike settings** – level, decay, pitch, filter, velocity per drum type; kit reverb, compressor and EQ |
+| ![Settings](docs/images/03-settings.png) | ![Strike settings](docs/images/04-strike-settings.png) |
+| **5 · Record & build** – record the plugin and build the kit; the log shows every instrument's layers and memory | |
+| ![Record and build](docs/images/05-record-build.png) | |
+
 ## Features
 
 - **Drum plugin → Strike kit.** Hosts a VST3 drum plugin, reads the kit layout (Superior Drummer 3 /
