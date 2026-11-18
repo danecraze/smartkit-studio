@@ -165,3 +165,70 @@ def test_record_and_build_asks_nothing_afterwards(converter_library, tmp_path, m
         assert len(asked) == n
     finally:
         app.destroy()
+
+
+def test_start_dialog_new_and_open(converter_library, tmp_path, monkeypatch):
+    """The start window: create a new kit, or open a saved one."""
+    tk = pytest.importorskip('tkinter')
+    try:
+        r = tk.Tk(); r.destroy()
+    except tk.TclError:
+        pytest.skip('no display')
+    import smartkit_app as A
+    monkeypatch.setattr(A, 'PROJECTS', str(tmp_path / 'Projects'))
+    monkeypatch.setattr(A, 'SETTINGS_FILE', str(tmp_path / 'studio_settings.json'))
+    for name in ('showinfo', 'showerror', 'showwarning'):
+        monkeypatch.setattr(A.messagebox, name, lambda *a, **k: None)
+    app = A.App()
+    try:
+        app.run_bg = lambda fn, done=None, text='': (lambda res: done(res) if done else None)(fn())
+        app.v_kit.set('Saved Kit'); app.refresh_project()
+        app.add_source([converter_library], 'folder')
+        n = len(app.rows)
+        answers = [('new', 'Fresh Kit'), ('open', 'Saved Kit')]
+        monkeypatch.setattr(A.T.Dialog, 'show', lambda self: (self.destroy(), answers.pop(0))[1])
+        app.start_dialog()
+        assert app.v_kit.get() == 'Fresh Kit' and not app.rows
+        app.start_dialog()
+        assert app.v_kit.get() == 'Saved Kit' and len(app.rows) == n
+        assert app.free_kit_name() == 'New kit 1'
+    finally:
+        app.destroy()
+
+
+def test_find_sounds_instant_with_kit_layout(tmp_path, monkeypatch):
+    """With a known kit layout, Find sounds lists the sounds without playing them; ▶ Play / Record measure them."""
+    tk = pytest.importorskip('tkinter')
+    try:
+        r = tk.Tk(); r.destroy()
+    except tk.TclError:
+        pytest.skip('no display')
+    import numpy as np
+    import smartkit_app as A
+    monkeypatch.setattr(A, 'PROJECTS', str(tmp_path / 'Projects'))
+    monkeypatch.setattr(A, 'SETTINGS_FILE', str(tmp_path / 'studio_settings.json'))
+    for name in ('showinfo', 'showerror', 'showwarning'):
+        monkeypatch.setattr(A.messagebox, name, lambda *a, **k: None)
+    app = A.App()
+    try:
+        app.run_bg = lambda fn, done=None, text='': (lambda res: done(res) if done else None)(fn())
+        app.v_kit.set('Layout Kit'); app.refresh_project()
+        played = []
+        class FakePlugin: raw_state = b''
+        app.host.plugin = FakePlugin()
+        app.host.ring_hit = lambda note, **k: (played.append(note), (np.ones((4800, 2), np.float32) * 0.5, 0.1))[1]
+        app.layout = [dict(box=1, pos='Snare', drum='Tma', lib='SSD 5', type='snare', code='snareR', notes=[38], play=38,
+                           suffix='R', label='Center', role='snare', inst='Snare', group='Snare – Tma', drum_name='Tma'),
+                      dict(box=2, pos='Crash L', drum='Zld 18', lib='SSD 5', type='crash', code='crash1', notes=[55],
+                           play=55, suffix='', label='Edge', role='crash', inst='Crash L', group='Crash L – Zld 18',
+                           drum_name='Zld 18')]
+        app.do_probe()
+        assert len(app.rows) == 2 and not played                    # nothing played
+        assert all(not r['ring'] and r['file'] is None for r in app.rows.values())
+        monkeypatch.setattr(A, 'winsound', None, raising=False)
+        key = next(iter(app.rows))
+        app.play_key(key)                                           # ▶ Play measures it once
+        assert played == [38 if app.rows[key]['note'] == 38 else 55] and app.rows[key]['ring'] == 0.1
+        assert app.rows[key]['file'] and os.path.exists(app.rows[key]['file'])
+    finally:
+        app.destroy()

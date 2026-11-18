@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.14
+- Steven Slate Drums 5 now makes sound: it is silent in SmartKit's usual plugin player (pedalboard), so SmartKit
+  runs it in a second player, DawDreamer, in a helper process (installed automatically the first time). Any
+  other plugin that stays silent is tried in DawDreamer automatically. With DawDreamer the plugin window is for
+  choosing the kit only (no live sound while it is open).
+- Plugin window: you hear the plugin – drums clicked in its window play through the audio output chosen on
+  step 3 (Windows default, or e.g. your Focusrite). The window can stay open while SmartKit is used (Find sounds
+  re-reads the kit from it); close it or press the button again when the kit is chosen. Loading a plugin no
+  longer freezes SmartKit's window (plugins now load on their own thread).
+- After loading a kit SmartKit checks how the plugin makes sound (MIDI channel 1 or 10, fast or real-time
+  playback) and uses that; no more waiting up to 3 minutes for a plugin that stays silent.
+- Start window: create a new kit (name suggested) or open a saved one (newest first, with date and number
+  of sounds). Also File → Open kit….
+- Find sounds is instant when the kit layout is read from the plugin (Superior Drummer, EZdrummer, SSD5): the
+  sounds are listed without playing them; ring time and level are measured with ▶ Play or while recording.
+- Steven Slate Drums 5: the kit layout (drums, articulations, notes) is read from the plugin, like Superior
+  Drummer – no scan of all 128 notes, with real names
+  (Snare Rimshot, Hi-Hat Tip 2/5 Open …) and the right types, codes and hi-hat positions.
+- Other plugins: the note scan tries each note once, then looks again only at the silent ones – much faster.
+- Crash log (smartkit_errors.txt) is trimmed when it grows past 2 MB.
+
 ## 0.13
 - New look: dark theme for dark studios (View → Light for daylight), step bar, dark title bar on Windows,
   help text that folds away (click WHAT TO DO). An `icon.ico` / `icon.png` next to the program is used as the

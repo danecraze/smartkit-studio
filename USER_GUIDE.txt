@@ -94,6 +94,11 @@ File menu        Open preset / Save preset (Ctrl+O / Ctrl+S), Save settings / Lo
 View menu        Dark (default) or Light. Click WHAT TO DO at the top of a step to hide or show
                  the help text. Put an icon.ico (or icon.png) next to the program to use your own
                  window icon.
+Plugin window    Step 1 → Open plugin window. Click its drums to hear them (sound goes to the output
+                 chosen on step 3: 'Plugin window sound'). It can stay open while you check sounds and
+                 pads; Find sounds reads the kit from it. Close it (or press the button again) when done.
+Start window     When SmartKit opens: Create a new kit, or pick a saved kit and Open (File →
+                 Open kit… shows it again).
 Kit (top right)  Everything belongs to the kit shown in the header (its project folder is
                  Projects\<kit>). Type a new name to rename the kit (sounds and recordings stay),
                  pick another kit from the list to open it, File → New kit for an empty one.

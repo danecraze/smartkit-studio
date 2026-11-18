@@ -2,7 +2,7 @@
 
 **Build Alesis Strike / Strike Pro kits from a drum plugin or from samples you already have.**
 
-SmartKit Studio is a free Windows app that turns a drum VST3 kit (e.g. Superior Drummer 3, EZdrummer) or a
+SmartKit Studio is a free Windows app that turns a drum VST3 kit (e.g. Superior Drummer 3, EZdrummer, Steven Slate Drums 5) or a
 folder of drum samples into a ready-to-play kit for the Alesis Strike / Strike Pro drum module: instruments
 (`.sin`), samples and a kit (`.skt`) written straight to the module's SD card, planned to fit the module's
 200 MB sample memory with the best sound it can get.
@@ -55,7 +55,7 @@ folder of drum samples into a ready-to-play kit for the Alesis Strike / Strike P
 
 - Windows 10/11 (the app is Python + Tk; the plugin host part needs Windows VST3 plugins)
 - [Python 3.10+](https://www.python.org/downloads/) – tick **"Add python.exe to PATH"** when installing
-- Python packages: `numpy`, and `pedalboard` for plugin hosting (installed automatically on first start)
+- Python packages: `numpy`, `pedalboard` for plugin hosting, and `dawdreamer` as a second plugin player for plugins that are silent in pedalboard (e.g. Steven Slate Drums 5) – all installed automatically on first start
 - An Alesis Strike or Strike Pro module and its SD card (firmware 1.5 was used for testing)
 
 ## Install and start

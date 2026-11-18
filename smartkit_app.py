@@ -12,7 +12,7 @@ sys.path.insert(0, HERE)
 import numpy as np
 import host as H
 import smartkit as SK
-import sd3state, sd3names
+import sd3state, sd3names, ssd5state
 import sources as SRC
 import theme as T
 import levelcal
@@ -26,7 +26,7 @@ if sys.platform == 'win32':                     # own taskbar entry (with SmartK
 from analyse import load_articulation, dedupe, read_wav, measure, guess_role
 from plan import Artic, WEIGHT
 
-VERSION = '0.13'
+VERSION = '0.14'
 PROJECTS = os.path.join(HERE, 'Projects')
 PRESETS = os.path.join(HERE, 'Presets')
 SETTINGS_DIR = os.path.join(HERE, 'Settings')
@@ -61,6 +61,7 @@ FOLDER_MODES = ['A folder per type: <kit> KICKS, <kit> SNARES …', 'One folder 
                 'Kit folder with type subfolders: <kit>\\CRASH, <kit>\\SNARE …']
 FOLDER_NESTED = FOLDER_MODES[3]
 COMP_MODES = ['More layers for the hard hits + restore loudness steps', 'More layers for the hard hits only', 'Off']
+AUDIO_DEFAULT, AUDIO_OFF = 'Windows default output', 'off (silent)'
 LEVEL_MODES = ['Keep the kit balance (one gain for all)', 'Maximise every instrument (each to -1 dBFS)',
                "Every instrument at full level, kit pads keep the plugin's mix"]
 
@@ -97,8 +98,9 @@ STEP_TEXT = {
               "mixed in one kit.\n"
               "KIT: everything belongs to the kit named top right – type to rename it, pick another from the list, File → New kit for a fresh one.\n"
               "PLUGIN: 1. Pick your drum plugin.   2. Press Load plugin (Superior Drummer takes about "
-              "a minute).   3. Press Open plugin window, load the kit/preset you want, wait until it has finished "
-              "loading, then press  ✔ Kit loaded – continue  in the small SmartKit window (top right). "
+              "a minute).   3. Press Open plugin window and load the kit/preset you want – click its drums to hear "
+              "them (sound goes to the output chosen on step 3). The window can stay open while you work; close it, "
+              "or press the button again, when the kit is ready. "
               "Turn off humanize/randomising in the plugin.\n"
               "Next time you can press Use saved kit instead of opening the window.\n"
               "SAMPLES: add a sample folder (e.g. a folder in Samples on the SD card), a sampler instrument (SFZ, "
@@ -126,6 +128,11 @@ STEP_TEXT = {
              "output folder – pick the SD card to put it straight on the module.\n"
              "When the card goes back into the module it re-reads the user kits, which takes a moment.",
 }
+
+
+def kit_layout(raw):
+    """Drums and articulations of the plugin's kit: Superior Drummer / EZdrummer, or Steven Slate Drums 5."""
+    return sd3state.parse(raw) or ssd5state.parse(raw)
 
 
 def safe_name(s):
@@ -311,6 +318,7 @@ class App(tk.Tk):
         self.set_busy(True, text)
 
         def work():
+            self.host.hold = True                    # live sound of the plugin window pauses meanwhile
             try:
                 r = fn()
                 self.q.put(('done', (done, r)))
@@ -320,6 +328,8 @@ class App(tk.Tk):
                 self.log('ERROR:\n' + traceback.format_exc()); self.q.put(('done', (None, None)))
                 self.q.put(('error', 'Something went wrong – see the log on the Record & build tab\n(also saved as log.txt in '
                            + str(getattr(self, 'proj_dir', '') or PROJECTS) + ').'))
+            finally:
+                self.host.hold = False
         threading.Thread(target=work, daemon=True).start()
 
     def progress(self, i, n, text):
@@ -348,6 +358,8 @@ class App(tk.Tk):
                     if cb: cb(r)
                 elif kind == 'error':
                     messagebox.showerror('SmartKit', val)
+                elif kind == 'editor_closed':
+                    self.editor_closed(val)
         except queue.Empty:
             pass
         self.after(100, self.pump)
@@ -377,6 +389,7 @@ class App(tk.Tk):
         self.kit_tip = ttk.Label(kb, text='', style='BarMuted.TLabel'); self.kit_tip.pack(side='left', padx=(10, 0))
         fm = menu('File')
         fm.add_command(label='New kit…', command=self.new_kit)
+        fm.add_command(label='Open kit…', command=self.start_dialog)
         fm.add_command(label='Clean up this kit\'s project files…', command=self.cleanup_project)
         fm.add_separator()
         fm.add_command(label='Open preset…', command=self.load_preset, accelerator='Ctrl+O')
@@ -426,6 +439,12 @@ class App(tk.Tk):
     def on_close(self):
         if self.busy and not messagebox.askyesno('SmartKit', 'SmartKit is still working. Close anyway?'):
             return
+        if self.host.editor_open and getattr(self, 'editor_ev', None):
+            self.editor_ev.set()
+        try:
+            self.host.unload()
+        except Exception:
+            pass
         try:
             self.save_settings(); self.save_map()
         except Exception:
@@ -447,7 +466,8 @@ class App(tk.Tk):
         ttk.Combobox(f, textvariable=self.v_plugin, values=names, state='readonly', width=50).grid(row=0, column=1, sticky='w')
         b = ttk.Frame(t); b.pack(fill='x', padx=12, pady=8)
         ttk.Button(b, text='Load plugin', style='Accent.TButton', command=self.do_load).pack(side='left', padx=4)
-        ttk.Button(b, text='Open plugin window (choose kit)', command=self.do_editor).pack(side='left', padx=4)
+        self.btn_editor = ttk.Button(b, text='Open plugin window (choose kit)', command=self.do_editor)
+        self.btn_editor.pack(side='left', padx=4)
         self.btn_restore = ttk.Button(b, text='Use saved kit', command=self.do_restore)
         self.btn_restore.pack(side='left', padx=4)
         self.plugin_info = tk.StringVar(value='No plugin loaded.')
@@ -500,16 +520,94 @@ class App(tk.Tk):
         self.status.set(f'Opened kit "{self.v_kit.get()}".')
         self.focus_set()
 
-    def new_kit(self):
+    def new_kit(self, name=None):
         if self.busy:
             messagebox.showinfo('SmartKit', 'Still busy – wait or press Stop.'); return
-        name = T.ask_string(self, 'New kit', 'Name of the new kit (max 26 letters):', maxlen=26)
+        if name is None:
+            name = T.ask_string(self, 'New kit', 'Name of the new kit (max 26 letters):',
+                                initial=self.free_kit_name(), maxlen=26)
         if not name: return
         name = safe_name(name)[:26]
         self.save_map()
         self.v_kit.set(name); self.refresh_project(); self.save_settings()
         self.status.set(f'Kit "{name}" opened.' if self.rows or self.sources else f'New kit "{name}" – add its sounds on step 1.')
         self.nb.select(0)
+
+    def free_kit_name(self, base='New kit'):
+        have = {k.lower() for k in self.kit_names()}
+        n = 1
+        while f'{base} {n}'.lower() in have:
+            n += 1
+        return f'{base} {n}'
+
+    def kit_list(self):
+        """[(name, last changed, number of sounds)] newest first."""
+        out = []
+        for k in self.kit_names():
+            d = os.path.join(PROJECTS, k)
+            mp = os.path.join(d, 'sounds.json')
+            try:
+                t = max(os.path.getmtime(os.path.join(d, f)) for f in os.listdir(d)) if os.listdir(d) else os.path.getmtime(d)
+            except OSError:
+                t = 0
+            n = 0
+            try:
+                n = len(json.load(open(mp)).get('rows', {})) if os.path.exists(mp) else 0
+            except Exception:
+                pass
+            out.append((k, t, n))
+        return sorted(out, key=lambda x: -x[1])
+
+    def start_dialog(self):
+        """At start: a new kit, or one of the saved kits."""
+        kits = self.kit_list()
+        d = T.Dialog(self, 'SmartKit Studio')
+        ttk.Label(d.body, text='Start a new kit or open one you made before', style='Title.TLabel').pack(anchor='w')
+        nf = ttk.LabelFrame(d.body, text='New kit'); nf.pack(fill='x', pady=(12, 8))
+        v_new = tk.StringVar(value=self.free_kit_name())
+        v_new.trace_add('write', lambda *a: len(v_new.get()) > 26 and v_new.set(v_new.get()[:26]))
+        row = ttk.Frame(nf); row.pack(fill='x')
+        e = ttk.Entry(row, textvariable=v_new, width=30, font=T.F['title']); e.pack(side='left')
+        ttk.Button(row, text='Create', style='Accent.TButton',
+                   command=lambda: d.ok(('new', v_new.get().strip()))).pack(side='left', padx=(8, 0))
+        e.bind('<Return>', lambda ev: d.ok(('new', v_new.get().strip())))
+        lb = None
+        if kits:
+            of = ttk.LabelFrame(d.body, text='Open a kit'); of.pack(fill='both', expand=True, pady=(4, 0))
+            lf = ttk.Frame(of); lf.pack(fill='both', expand=True)
+            lb = ttk.Treeview(lf, columns=('kit', 'changed', 'sounds'), show='headings', selectmode='browse',
+                              height=min(10, len(kits)))
+            for c, w, title, anc in (('kit', 260, 'kit', 'w'), ('changed', 110, 'last changed', 'w'),
+                                     ('sounds', 90, 'sounds', 'e')):
+                lb.heading(c, text=title, anchor=anc); lb.column(c, width=w, anchor=anc, stretch=c == 'kit')
+            sb = ttk.Scrollbar(lf, orient='vertical', command=lb.yview); lb.configure(yscrollcommand=sb.set)
+            lb.pack(side='left', fill='both', expand=True)
+            if len(kits) > 10: sb.pack(side='right', fill='y')
+            for i, (k, t, n) in enumerate(kits):
+                when = time.strftime('%d %b %Y', time.localtime(t)) if t else ''
+                lb.insert('', 'end', iid=str(i), values=(k, when, n if n else 'empty'))
+            cur = next((i for i, (k, _t, _n) in enumerate(kits) if k == self.v_kit.get()), 0)
+            lb.selection_set(str(cur)); lb.focus(str(cur)); lb.see(str(cur))
+            pick = lambda *_: lb.selection() and d.ok(('open', kits[int(lb.selection()[0])][0]))
+            lb.bind('<Double-Button-1>', pick); lb.bind('<Return>', pick)
+            d.button('Open', pick, accent=False)
+        d.button('Close', d.cancel)
+        (lb or e).focus_set()
+        if lb is None:
+            e.select_range(0, 'end')
+        r = d.show()
+        if not r:
+            return
+        kind, name = r
+        if kind == 'new' and name:
+            name = safe_name(name)[:26]
+            if name in self.kit_names() and not messagebox.askyesno(
+                    'SmartKit', f'There is already a kit called "{name}". Open it?'):
+                return self.after(50, self.start_dialog)
+            self.new_kit(name)
+        elif kind == 'open':
+            self.v_kit.set(name); self.open_kit(); self.save_settings()
+            self.nb.select(1 if self.rows else 0)
 
     @staticmethod
     def folder_mb(p):
@@ -649,7 +747,7 @@ class App(tk.Tk):
         sp = os.path.join(p, 'plugin_state.bin')
         if os.path.exists(sp):
             try:
-                lay = sd3state.parse(open(sp, 'rb').read())
+                lay = kit_layout(open(sp, 'rb').read())
                 if lay:
                     self.layout = lay
                     self.rename_auto()
@@ -810,7 +908,8 @@ class App(tk.Tk):
     def full_name(self, a):
         """'Snare – 6.5x14" Tama Bell Brass 1980s – Rim only (snareRO)': for choosing pads."""
         d = a.get('drum_name') or a['inst']
-        return f"{sd3names.art_long(a['code'], a['role'], a['pos'])}  ·  {d}  ({a['code']})"
+        long = a.get('art_name') or sd3names.art_long(a['code'], a['role'], a['pos'])
+        return f"{long}  ·  {d}  ({a['code']})"
 
     def rename_auto(self):
         for key, r in self.rows.items():
@@ -846,73 +945,85 @@ class App(tk.Tk):
                 return p
 
     def do_load(self):
-        """Plugins must be created on the main thread (their window can only open from that thread),
-        so the main window is busy meanwhile; a small separate window shows the progress."""
+        """Load the plugin (on SmartKit's plugin thread, so this window keeps working meanwhile)."""
         path = self.plugin_path()
         if not path or self.busy:
             return
-        import subprocess
-        expect = float(self.st.get('load_seconds', 70))
-        self.plugin_info.set(f'Loading {self.v_plugin.get()} …'); self.update()
-        splash = None
+        if self.host.editor_open:
+            messagebox.showinfo('SmartKit', 'Close the plugin window first.'); return
         try:
-            splash = subprocess.Popen([sys.executable, os.path.join(HERE, 'loading_splash.py'),
-                                       f'Loading {self.v_plugin.get()} …', str(expect)])
+            wait = float(self.v_loadwait.get() or 15)
         except Exception:
-            pass
+            wait = 15
+        self.plugin_info.set(f'Loading {self.v_plugin.get()} …')
+        self.loadbar.configure(mode='indeterminate'); self.loadbar.start(12)
         t0 = time.time()
-        try:
-            try:
-                wait = float(self.v_loadwait.get() or 15)
-            except Exception:
-                wait = 15
-            name = self.host.load(path, wait=wait)
-        except Exception as e:
-            self.plugin_info.set(f'Could not load the plugin: {e}'); name = None
-            self.log('Could not load the plugin:\n' + traceback.format_exc())
-            messagebox.showerror('SmartKit', f'Could not load {self.v_plugin.get()}:\n\n{e}\n\n'
-                                 'Close Superior Drummer if it is open on its own (or in another program) and try again.')
-        finally:
-            if splash:
-                splash.terminate()
-        if name:
+
+        def done(name):
+            self.loadbar.stop(); self.loadbar.configure(mode='determinate')
+            if not name:
+                self.loadbar['value'] = 0; return
             secs = time.time() - t0
             self.log(f'{name} loaded in {secs:.0f} s')
+            if self.host.player == 'dawdreamer':
+                self.log('  (runs in the second plugin player, DawDreamer: it is silent in the first one)')
             self.st['load_seconds'] = secs
             self.loadbar['value'] = 100
             self.plugin_info.set(f'{name} loaded in {secs:.0f} s. Now open the plugin window or use the saved kit.')
             self.save_settings()
+
+        def job():
+            try:
+                return self.host.load(path, wait=wait, log=self.log)
+            except Exception as e:
+                self.log('Could not load the plugin:\n' + traceback.format_exc())
+                self.q.put(('error', f'Could not load {self.v_plugin.get()}:\n\n{e}\n\nClose the plugin if it is '
+                                     'open on its own (or in another program) and try again.'))
+                self.q.put(('status', 'Could not load the plugin.'))
+                return None
+        self.run_bg(job, done, f'Loading {self.v_plugin.get()} …')
 
     def need_plugin(self):
         if not self.host.plugin:
             messagebox.showinfo('SmartKit', 'Load the plugin first (tab 1).'); return False
         if self.busy:
             messagebox.showinfo('SmartKit', 'Still busy – wait or press Stop.'); return False
+        if self.host.editor_open and getattr(self.host.plugin, 'modal_editor', False):
+            messagebox.showinfo('SmartKit', 'Close the plugin window first (press "Close plugin window" on step 1 '
+                                            'or close it yourself), then try again.'); return False
         return True
 
     def do_editor(self):
+        """Open the plugin window and leave it open: its drums can be heard (audio output on step 3) while
+        SmartKit stays usable. Press the button again (or close the window) when the kit is chosen."""
+        if self.host.editor_open:
+            if getattr(self, 'editor_ev', None):
+                self.editor_ev.set()
+            return
         if not self.need_plugin(): return
-        import subprocess
-        self.status.set('Plugin window open – press "Kit loaded – continue" when your kit has loaded.')
-        ev = threading.Event()
-        helper = None
-        try:
-            helper = subprocess.Popen([sys.executable, os.path.join(HERE, 'editor_done.py')])
-            threading.Thread(target=lambda: (helper.wait(), ev.set()), daemon=True).start()
-        except Exception:
-            pass
-        try:
-            self.host.show_editor(close_event=ev)
-        except Exception as e:
-            messagebox.showerror('SmartKit', f'Could not open the plugin window: {e}'); return
-        finally:
-            if helper and helper.poll() is None:
-                helper.terminate()
+        self.host.audio_out = '' if self.v_audio_out.get() == AUDIO_DEFAULT else (
+            'off' if self.v_audio_out.get() == AUDIO_OFF else self.v_audio_out.get())
+        self.editor_ev = threading.Event()
+        self.btn_editor.configure(text='Close plugin window (kit chosen)')
+        if getattr(self.host.plugin, 'modal_editor', False):
+            self.status.set('Plugin window open – choose your kit (this plugin plays no sound in SmartKit while the '
+                            'window is open). Close it (or press the button again) when the kit has loaded.')
+        else:
+            self.status.set('Plugin window open – click its drums to hear them. Close it (or press the button '
+                            'again) when your kit has loaded.')
+        self.host.open_editor(self.editor_ev, on_closed=lambda err: self.q.put(('editor_closed', err)))
+
+    def editor_closed(self, err):
+        self.btn_editor.configure(text='Open plugin window (choose kit)')
+        if err is not None:
+            self.log(f'Plugin window: {err}')
+            messagebox.showerror('SmartKit', f'Could not open the plugin window: {err}'); return
         os.makedirs(self.project_dir(), exist_ok=True)
         try:
             self.host.save_state(os.path.join(self.project_dir(), 'plugin_state.bin'))
         except Exception as e:
             self.log(f'Could not save the kit settings: {e}')
+        self.layout = []
         self.read_layout()
         self.refresh_project_buttons()
         self.wait_ready()
@@ -923,13 +1034,16 @@ class App(tk.Tk):
 
     def read_layout(self):
         try:
-            self.layout = sd3state.parse(self.host.plugin.raw_state)
+            self.layout = kit_layout(self.host.get_state())
         except Exception as e:
             self.layout = []
             self.log(f'Could not read the kit layout from the plugin: {e}')
         if self.layout:
             groups = sorted({a['group'] for a in self.layout})
             self.log(f'Read {len(self.layout)} articulations in {len(groups)} instruments from the plugin.')
+            if ssd5state.SKIPPED and self.layout and self.layout[0].get('art_name') is not None:
+                self.log('Left out (copies, rolls, e-drum duplicates, or layered instruments that sound together '
+                         'with another one on the same note): ' + '; '.join(ssd5state.SKIPPED))
             if sd3state.SKIPPED:
                 self.log(f'{len(sd3state.SKIPPED)} articulations are switched off in the plugin (not loaded) and are '
                          'left out: ' + ', '.join(a['code'] for a in sd3state.SKIPPED))
@@ -962,24 +1076,47 @@ class App(tk.Tk):
         self.wait_ready()
 
     def wait_ready(self):
-        self.plugin_info.set('Waiting for the kit samples to finish loading …')
+        """After a kit is loaded: check that the plugin makes sound (and how), then go on to step 2.
+        With a kit layout read from the plugin the sounds are listed straight away."""
+        self.plugin_info.set('Checking that the plugin makes sound …')
         self.loadbar.configure(mode='indeterminate'); self.loadbar.start(12)
-        probe_note = 38
-        if self.layout:
-            probe_note = sd3state.primary_note(self.layout[0])
+        probe_note = sd3state.primary_note(self.layout[0]) if self.layout else 38
 
         def job():
-            return self.host.wait_until_ready(note=probe_note, cancel=lambda: self.cancel_flag)
+            t = time.time()
+            ok = self.host.sound_check(probe_note, log=self.log, cancel=lambda: self.cancel_flag)
+            if not ok and self.host.player == 'pedalboard':
+                self.log('No sound with the first plugin player – trying the second one (DawDreamer) …')
+                self.q.put(('status', 'No sound yet – trying the second plugin player …'))
+                try:
+                    if self.host.switch_player(log=self.log):
+                        self.log(f'{self.host.plugin.name} now runs in DawDreamer.')
+                        ok = self.host.sound_check(probe_note, log=self.log, cancel=lambda: self.cancel_flag)
+                except Exception as e:
+                    self.log(f'DawDreamer: {e}')
+            return ok, time.time() - t
 
-        def done(t):
+        def done(r):
             self.loadbar.stop(); self.loadbar.configure(mode='determinate'); self.loadbar['value'] = 100
-            kit = f' {len(self.layout)} sounds found in the kit layout.' if self.layout else ''
-            self.plugin_info.set(('Kit ready.' if t is not None else
-                                  'No sound yet – the kit may still be loading. You can carry on.') + kit)
+            ok, secs = r if r else (False, 0)
+            kit = f' {len(self.layout)} sounds in the kit layout.' if self.layout else ''
+            how = []
+            if self.host.channel: how.append(f'MIDI channel {self.host.channel + 1}')
+            if self.host.realtime: how.append('real-time playback (slower recording)')
+            if ok:
+                self.plugin_info.set('Kit ready.' + (f" Plays on {', '.join(how)}." if how else '') + kit)
+                self.log(f'Plugin makes sound (checked in {secs:.0f} s)' + (f": {', '.join(how)}" if how else '') + '.')
+            else:
+                self.plugin_info.set('No sound from the plugin yet.' + kit)
+                self.log('No sound from the plugin: tried MIDI channels 1 and 10, fast and real-time playback.')
+                self.after(100, lambda: messagebox.showwarning('SmartKit', (
+                    'The plugin loaded but makes no sound in SmartKit.\n\nOpen the plugin window (step 1), check '
+                    'that a kit is loaded and plays when you click a drum, press "Kit loaded – continue", then try '
+                    'Find sounds again. The kit layout is still listed if SmartKit could read it.')))
             self.nb.select(1)                          # on to step 2
-            if not self.rows:
+            if not self.rows and (ok or self.layout):
                 self.after(300, self.do_probe)
-        self.run_bg(job, done, 'Waiting for the kit samples …')
+        self.run_bg(job, done, 'Checking the plugin …')
 
     # ============================================================ tab 2: sounds
     def tab_sounds(self, nb):
@@ -1031,25 +1168,53 @@ class App(tk.Tk):
     def do_probe(self):
         if not self.need_plugin(): return
         folder = os.path.join(self.project_dir(), 'probe')
-        if not self.layout:
+        if self.host.editor_open or not self.layout:      # the kit may have changed in the open plugin window
+            self.layout = []
             self.read_layout()
+            try:
+                self.host.save_state(os.path.join(self.project_dir(), 'plugin_state.bin'))
+            except Exception:
+                pass
         if self.layout:
             items = [(f"{a['box']:02d}_{a['code']}", sd3state.primary_note(a), a) for a in self.layout]
         else:
             items = [(f'N{n:03d}', n, None) for n in self.parse_notes()]
 
         def job():
-            found = {}
-            for i, (key, note, a) in enumerate(items):
-                if self.cancel_flag: raise H.Cancelled()
-                self.progress(i, len(items), f'Listening to {a["group"] + " " + a["label"] if a else "note " + str(note)} …')
-                audio, ring = self.host.ring_hit(note)
-                if audio is None:
-                    continue
-                f = os.path.join(folder, f'{key}.wav')
-                H.write_wav_float(f, audio)
-                found[key] = dict(note=note, ring=round(float(ring), 2), peak=float(np.abs(audio).max()), file=f, art=a)
+            found, t0 = {}, time.time()
+            if self.layout:
+                # The kit layout is known (Superior Drummer, EZdrummer, SSD5): list the sounds straight away.
+                # How long each one rings is measured when it is recorded, or played with ▶ Play.
+                for key, note, a in items:
+                    found[key] = dict(note=note, ring=0.0, peak=None, file=None, art=a)
+                self.progress(len(items), len(items), f'{len(found)} sounds in the kit')
+                self.log(f'Find sounds: {len(found)} sounds from the kit layout (nothing to play – instant).')
+                return found
+            # Known kit layout: every note should sound, so a silent one is tried several times (the plugin may
+            # still be loading it). Plain note scan (other plugins): most notes are empty, so one quick try each,
+            # then one more pass over the silent ones after a pause.
+            tries = 6 if self.layout else 1
+            passes = [items] if self.layout else [items, None]
+            for p_i, todo in enumerate(passes):
+                if todo is None:
+                    todo = [it for it in items if it[0] not in found]
+                    if not todo: break
+                    time.sleep(2.0)                     # give a slow plugin a moment to load its samples
+                    tries = 1
+                for i, (key, note, a) in enumerate(todo):
+                    if self.cancel_flag: raise H.Cancelled()
+                    what = a["group"] + " " + a["label"] if a else "note " + str(note)
+                    self.progress(i, len(todo), f'Listening to {what} …' + (' (second look)' if p_i else ''))
+                    audio, ring = self.host.ring_hit(note, tries=tries)
+                    if audio is None:
+                        continue
+                    f = os.path.join(folder, f'{key}.wav')
+                    H.write_wav_float(f, audio)
+                    found[key] = dict(note=note, ring=round(float(ring), 2), peak=float(np.abs(audio).max()), file=f, art=a)
             self.progress(len(items), len(items), f'{len(found)} sounds found')
+            self.log(f'Find sounds: {len(found)} sounds in {time.time() - t0:.0f} s'
+                     + ('' if self.layout else f' (scanned {len(items)} notes – this plugin\'s kit layout is not read '
+                        'directly; Superior Drummer, EZdrummer and Steven Slate Drums 5 are)'))
             return found
 
         def done(found):
@@ -1059,13 +1224,15 @@ class App(tk.Tk):
             fps = {}
             for key, f in found.items():
                 a = f['art']
-                aud, _ = read_wav(f['file'])
-                k = aud.mean(1)[:4096]; k = k / (np.linalg.norm(k) + 1e-12)
-                # same sound as another articulation of the SAME drum (SD3 reuses samples, e.g. bow shank = crash)
-                dup = next((m for m, kk in fps.items() if len(kk) == len(k) and float(np.dot(kk, k)) > 0.98
-                            and m.split('_')[0] == key.split('_')[0]
-                            and abs(20 * np.log10(found[m]['peak'] / max(f['peak'], 1e-9))) < 1.0), None)
-                fps[key] = k
+                dup = None
+                if f['file']:
+                    aud, _ = read_wav(f['file'])
+                    k = aud.mean(1)[:4096]; k = k / (np.linalg.norm(k) + 1e-12)
+                    # same sound as another articulation of the SAME drum (SD3 reuses samples, e.g. bow shank = crash)
+                    dup = next((m for m, kk in fps.items() if len(kk) == len(k) and float(np.dot(kk, k)) > 0.98
+                                and m.split('_')[0] == key.split('_')[0]
+                                and abs(20 * np.log10(found[m]['peak'] / max(f['peak'], 1e-9))) < 1.0), None)
+                    fps[key] = k
                 if a:
                     name, base = self.auto_name(a)
                     group, role, notes, sfx = a['group'], a['role'], a['notes'], sd3names.art_suffix(a['code'], a['role'], a['pos'])
@@ -1113,7 +1280,8 @@ class App(tk.Tk):
         pads = ' '.join('instrument only' if p == INST_ONLY else p for p in r['pads'])
         return ('☑' if r['use'] else '☐', r.get('full') or r['name'], r['name'] + star('name'),
                 r['role'] + star('role'), (pads + star('pads')) if pads else '',
-                r['ring'], f"{20 * np.log10(max(r['peak'], 1e-9)):.1f}", ' '.join(map(str, r['notes'][:4])))
+                r['ring'] or '', f"{20 * np.log10(max(r['peak'], 1e-9)):.1f}" if r.get('peak') else '',
+                ' '.join(map(str, r['notes'][:4])))
 
     def update_group(self, gid):
         kids = self.tree.get_children(gid)
@@ -1306,7 +1474,36 @@ class App(tk.Tk):
         k = self.sel()
         if k: self.play_key(k)
 
+    def update_row(self, key):
+        if hasattr(self, 'tree') and self.tree.exists(key):
+            self.tree.item(key, values=self.row_values(self.rows[key]))
+
+    def measure_row(self, r):
+        """Play a plugin sound once (velocity 127) and keep it: ring time, level and a preview file."""
+        audio, ring = self.host.ring_hit(int(r['note']))
+        if audio is None:
+            return False
+        f = os.path.join(getattr(self, 'proj_dir', None) or self.project_dir(), 'probe', f"{r['key']}.wav")
+        H.write_wav_float(f, audio)
+        r.update(ring=round(float(ring), 2), peak=float(np.abs(audio).max()), file=f)
+        return True
+
     def play_key(self, key):
+        r = self.rows[key]
+        if not r.get('file') or not os.path.exists(r['file']):
+            if r.get('src'):
+                return
+            if not self.host.plugin:
+                self.status.set('Load the plugin first (step 1) to hear plugin sounds.'); return
+            if self.busy:
+                return
+            def done(ok):
+                if ok:
+                    self.update_row(key); self.save_map(); self.play_key(key)
+                else:
+                    self.status.set(f"{r['name']}: no sound from the plugin.")
+            self.run_bg(lambda: self.measure_row(r), done, f"Playing {r['name']} …")
+            return
         try:
             import winsound
             a, sr = read_wav(self.rows[key]['file'])
@@ -1443,13 +1640,17 @@ class App(tk.Tk):
             ('Empty pad zones (crash bow, ride edge, rims, kick 2 …)', 'fill_empty',
              'play the partner zone', ['play the partner zone', 'stay silent']),
             ('Zone gain', 'gain', 'unity', ['unity', 'normalise']),
-            ('Plugin start-up wait (s) – raise if a plugin loads without sound', 'loadwait', '15', None),
+            ('Plugin start-up wait (s) – raise if a plugin loads without sound', 'loadwait', '3', None),
+            ('Plugin window sound (audio output)', 'audio_out', AUDIO_DEFAULT,
+             [AUDIO_DEFAULT, AUDIO_OFF] + H.wave_outputs()),
             ('Output folder or SD card', 'out', '', 'dir'),
             ('Kit settings copied from (.skt)', 'template', os.path.join(HERE, 'template.skt'), 'file'),
         ]
         for i, (lab, key, dflt, kind) in enumerate(rows):
             ttk.Label(f, text=lab).grid(row=i, column=0, sticky='w', pady=2)
             v = self.var(key, dflt)
+            if key == 'audio_out':
+                self.v_audio_out = v
             if isinstance(kind, list):
                 ttk.Combobox(f, textvariable=v, values=kind, state='readonly', width=40).grid(row=i, column=1, sticky='w')
             else:
@@ -1682,6 +1883,10 @@ class App(tk.Tk):
                 if os.path.isdir(folder):
                     for f in os.listdir(folder):
                         os.remove(os.path.join(folder, f))
+                if not r.get('ring'):                   # not measured yet (kit layout read from the plugin)
+                    if not self.measure_row(r):
+                        self.log(f"  {r['name']}: no sound from the plugin – skipped"); done += len(vels) * reps
+                        continue
                 retried += self.host.render_note(r['note'], vels, reps, r['ring'], folder, self.progress,
                                                  lambda: self.cancel_flag, done, total)
                 open(os.path.join(folder, '_note.txt'), 'w').write(str(int(r['note'])))
@@ -1693,6 +1898,9 @@ class App(tk.Tk):
             return True
 
         def rec_done(ok):
+            for r in todo:                               # ring times / levels measured while recording
+                self.update_row(r['key'])
+            self.save_map()
             if ok and then:
                 self.status.set('✔ Recording finished – building the kit …')
                 self.after(200, then)
@@ -1887,11 +2095,18 @@ if __name__ == '__main__':
     # pythonw has no console: keep errors and hard crashes (e.g. inside a plugin) in a file
     try:
         import faulthandler
-        _crash = open(os.path.join(HERE, 'smartkit_errors.txt'), 'a', buffering=1, encoding='utf-8')
+        _ef = os.path.join(HERE, 'smartkit_errors.txt')
+        if os.path.exists(_ef) and os.path.getsize(_ef) > 2_000_000:      # keep the crash log small
+            _tail = open(_ef, 'rb').read()[-200_000:]
+            open(_ef, 'wb').write(_tail)
+        _crash = open(_ef, 'a', buffering=1, encoding='utf-8')
         _crash.write(f"\n===== SmartKit {VERSION} started {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
         sys.stderr = _crash
         if sys.stdout is None: sys.stdout = _crash
-        faulthandler.enable(_crash)
+        if not os.environ.get('SMARTKIT_NO_CRASHLOG'):   # some plugins' copy protection trips Windows
+            faulthandler.enable(_crash)                  # exceptions on purpose; this switch leaves them alone
     except Exception:
         pass
-    App().mainloop()
+    app = App()
+    app.after(200, app.start_dialog)
+    app.mainloop()

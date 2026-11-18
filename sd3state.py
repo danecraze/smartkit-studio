@@ -81,6 +81,7 @@ def parse(raw, include_off=False):
        {box, inst, pos, drum, type, role, code, suffix, notes, label}  (empty list if not Toontrack).
     Articulations switched off in Superior Drummer ('blocksounds' in their pad block = not loaded,
     the plugin then plays a stand-in sound) are left out unless include_off."""
+    SKIPPED.clear(); UNREACHABLE.clear(); EDRUM.clear()       # nothing left over from another plugin
     txt = state_text(raw)
     if not txt:
         return []
