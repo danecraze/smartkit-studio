@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15
+- Plugin window: a small SmartKit panel floats beside it with **Kit chosen – back to SmartKit** and
+  **Cancel – close without changes** (puts the kit back as it was). Both close the plugin window and bring
+  SmartKit to the front. Closing the plugin window itself still counts as "kit chosen".
+- Every pop-up (questions, warnings, errors) now uses SmartKit's theme instead of Windows' grey message boxes.
+  File and folder pickers stay the normal Windows ones.
+
+## 0.14.1
+- `Install SmartKit Studio.bat`: installs the add-ons and makes a SmartKit Studio icon on the Desktop and in
+  the Start menu (opens without a console window).
+
 ## 0.14
 - Steven Slate Drums 5 now makes sound: it is silent in SmartKit's usual plugin player (pedalboard), so SmartKit
   runs it in a second player, DawDreamer, in a helper process (installed automatically the first time). Any

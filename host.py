@@ -326,7 +326,9 @@ class DrumHost:
         open(path, 'wb').write(self.get_state())
 
     def restore_state(self, path):
-        data = open(path, 'rb').read()
+        self.set_state(open(path, 'rb').read())
+
+    def set_state(self, data):
         def put():
             with self._lock:
                 self.plugin.raw_state = data

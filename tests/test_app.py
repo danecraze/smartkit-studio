@@ -232,3 +232,46 @@ def test_find_sounds_instant_with_kit_layout(tmp_path, monkeypatch):
         assert app.rows[key]['file'] and os.path.exists(app.rows[key]['file'])
     finally:
         app.destroy()
+
+
+def test_themed_popups_and_plugin_panel(tmp_path, monkeypatch):
+    """Pop-ups use SmartKit's theme (not Windows' message boxes); the floating panel next to the plugin window
+    closes it with 'Kit chosen' or 'Cancel'."""
+    tk = pytest.importorskip('tkinter')
+    try:
+        r = tk.Tk(); r.destroy()
+    except tk.TclError:
+        pytest.skip('no display')
+    import threading, types
+    import smartkit_app as A, theme as T
+    assert A.messagebox is T.messagebox
+    monkeypatch.setattr(A, 'PROJECTS', str(tmp_path / 'Projects'))
+    monkeypatch.setattr(A, 'SETTINGS_FILE', str(tmp_path / 'studio_settings.json'))
+    app = A.App()
+    try:
+        def answer(value):
+            for w in app.winfo_children():
+                if isinstance(w, T.Dialog):
+                    w.ok(value); return
+            app.after(50, lambda: answer(value))
+        app.after(100, lambda: answer(False))
+        assert T.messagebox.askyesno('SmartKit', 'Long question ' * 30, parent=app) is False
+        app.after(100, lambda: answer('ok'))
+        assert T.messagebox.showerror('SmartKit', 'Something went wrong', parent=app) == 'ok'
+        app.after(100, lambda: answer(None))
+        assert T.messagebox.askyesnocancel('SmartKit', 'Yes, no or cancel?', parent=app) is None
+
+        app.host.editor_open = True
+        app.host.plugin = types.SimpleNamespace(modal_editor=True)
+        app.editor_ev = threading.Event()
+        app.plugin_panel()
+        assert app.panel is not None and app.panel.winfo_exists()
+        buttons = [w for w in app.panel.winfo_children()[0].winfo_children() if isinstance(w, A.ttk.Button)]
+        buttons[1].invoke()                        # Cancel
+        assert app.editor_ev.is_set() and app.editor_cancel
+        app.host.editor_open = False
+        app.editor_before = None
+        app.editor_closed(None)
+        assert app.panel is None and not app.editor_cancel
+    finally:
+        app.destroy()

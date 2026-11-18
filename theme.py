@@ -435,6 +435,60 @@ def ask_string(parent, title, prompt, initial='', maxlen=None):
     return d.show() or None
 
 
+class _MessageBox:
+    """Themed stand-ins for tkinter.messagebox (same call style: showinfo(title, message, parent=…)).
+    Long messages wrap; Return = the main button, Escape = cancel / no."""
+    ICONS = {'info': ('i', 'accent'), 'warning': ('!', 'accent'), 'error': ('×', 'bad'), 'question': ('?', 'accent')}
+
+    def _show(self, kind, title, message, buttons, default, cancel, parent=None, detail=None, **_):
+        parent = parent or tk._default_root
+        d = Dialog(parent, title or 'SmartKit')
+        glyph, col = self.ICONS[kind]
+        colour = C.get(col) or ('#e5534b' if col == 'bad' else C['accent'])
+        row = ttk.Frame(d.body); row.pack(fill='both', expand=True)
+        c = tk.Canvas(row, width=34, height=34, highlightthickness=0, background=C['bg'])
+        c.create_oval(2, 2, 32, 32, outline=colour, width=2)
+        c.create_text(17, 17, text=glyph, fill=colour, font=(F.get('title') or ('Segoe UI', 12))[:1] + (14, 'bold'))
+        c.pack(side='left', anchor='n', padx=(0, 14))
+        text = str(message) + (f'\n\n{detail}' if detail else '')
+        ttk.Label(row, text=text, justify='left', wraplength=440).pack(side='left', anchor='w', fill='x')
+        first = None
+        for label, value in reversed(buttons):
+            b = d.button(label, (lambda v=value: d.ok(v)), accent=(value == default))
+            if value == default:
+                first = b
+        d.cancel = lambda: (setattr(d, 'result', cancel), d.destroy())
+        d.protocol('WM_DELETE_WINDOW', d.cancel)
+        d.bind('<Escape>', lambda e: d.cancel())
+        d.bind('<Return>', lambda e: d.ok(default))
+        if first is not None:
+            d.after(10, first.focus_set)
+        r = d.show()
+        return r
+
+    def showinfo(self, title=None, message='', **kw):
+        self._show('info', title, message, [('OK', 'ok')], 'ok', 'ok', **kw); return 'ok'
+
+    def showwarning(self, title=None, message='', **kw):
+        self._show('warning', title, message, [('OK', 'ok')], 'ok', 'ok', **kw); return 'ok'
+
+    def showerror(self, title=None, message='', **kw):
+        self._show('error', title, message, [('OK', 'ok')], 'ok', 'ok', **kw); return 'ok'
+
+    def askyesno(self, title=None, message='', **kw):
+        return bool(self._show('question', title, message, [('Yes', True), ('No', False)], True, False, **kw))
+
+    def askokcancel(self, title=None, message='', **kw):
+        return bool(self._show('question', title, message, [('OK', True), ('Cancel', False)], True, False, **kw))
+
+    def askyesnocancel(self, title=None, message='', **kw):
+        return self._show('question', title, message, [('Yes', True), ('No', False), ('Cancel', None)], True, None,
+                          **kw)
+
+
+messagebox = _MessageBox()
+
+
 def to_recycle_bin(paths):
     """Windows: move files/folders to the Recycle Bin (can be restored). Elsewhere: delete."""
     paths = [os.path.abspath(p) for p in paths if os.path.exists(p)]

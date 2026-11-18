@@ -5,7 +5,7 @@ Double-click "SmartKit Studio.bat" to start.
 """
 import os, sys, json, re, threading, queue, time, traceback, types
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -15,6 +15,7 @@ import smartkit as SK
 import sd3state, sd3names, ssd5state
 import sources as SRC
 import theme as T
+messagebox = T.messagebox                         # SmartKit-themed pop-ups
 import levelcal
 
 if sys.platform == 'win32':                     # own taskbar entry (with SmartKit's icon, not Python's) –
@@ -26,7 +27,7 @@ if sys.platform == 'win32':                     # own taskbar entry (with SmartK
 from analyse import load_articulation, dedupe, read_wav, measure, guess_role
 from plan import Artic, WEIGHT
 
-VERSION = '0.14'
+VERSION = '0.15'
 PROJECTS = os.path.join(HERE, 'Projects')
 PRESETS = os.path.join(HERE, 'Presets')
 SETTINGS_DIR = os.path.join(HERE, 'Settings')
@@ -1004,6 +1005,11 @@ class App(tk.Tk):
         self.host.audio_out = '' if self.v_audio_out.get() == AUDIO_DEFAULT else (
             'off' if self.v_audio_out.get() == AUDIO_OFF else self.v_audio_out.get())
         self.editor_ev = threading.Event()
+        self.editor_cancel = False
+        try:
+            self.editor_before = self.host.get_state()     # for Cancel: put the kit back as it was
+        except Exception:
+            self.editor_before = None
         self.btn_editor.configure(text='Close plugin window (kit chosen)')
         if getattr(self.host.plugin, 'modal_editor', False):
             self.status.set('Plugin window open – choose your kit (this plugin plays no sound in SmartKit while the '
@@ -1012,9 +1018,68 @@ class App(tk.Tk):
             self.status.set('Plugin window open – click its drums to hear them. Close it (or press the button '
                             'again) when your kit has loaded.')
         self.host.open_editor(self.editor_ev, on_closed=lambda err: self.q.put(('editor_closed', err)))
+        self.after(600, self.plugin_panel)
+
+    def plugin_panel(self):
+        """Small SmartKit window that floats above the plugin window: 'Kit chosen – back to SmartKit' or
+        'Cancel' (close the plugin window and put the kit back as it was)."""
+        if not self.host.editor_open or getattr(self, 'panel', None) is not None:
+            return
+        w = self.panel = tk.Toplevel(self)
+        w.withdraw(); w.title('SmartKit'); w.resizable(False, False); w.configure(background=T.C['bg'])
+        w.attributes('-topmost', True)
+        f = ttk.Frame(w, padding=(18, 14, 18, 16)); f.pack(fill='both', expand=True)
+        ttk.Label(f, text=f'Choose the kit for "{self.v_kit.get()}"', style='Title.TLabel').pack(anchor='w')
+        modal = getattr(self.host.plugin, 'modal_editor', False)
+        ttk.Label(f, justify='left', wraplength=330, style='Muted.TLabel', text=(
+            'Load the kit or preset you want in the plugin window and wait until its samples have loaded. '
+            + ('This plugin makes no sound while its window is open.' if modal else
+               'Click its drums to hear them.'))).pack(anchor='w', pady=(4, 12))
+
+        def finish(cancel):
+            self.editor_cancel = cancel
+            self.status.set('Closing the plugin window …')
+            self.editor_ev.set()
+            for b in btns: b.state(['disabled'])
+        btns = [ttk.Button(f, text='✔  Kit chosen – back to SmartKit', style='Accent.TButton',
+                           command=lambda: finish(False)),
+                ttk.Button(f, text='Cancel – close without changes', command=lambda: finish(True))]
+        btns[0].pack(fill='x'); btns[1].pack(fill='x', pady=(6, 0))
+        w.protocol('WM_DELETE_WINDOW', lambda: finish(True))
+        w.update_idletasks()
+        w.geometry(f'+{w.winfo_screenwidth() - w.winfo_reqwidth() - 40}+60')
+        w.deiconify(); T.title_bar(w); T.app_icon(w)
+
+    def close_plugin_panel(self):
+        w, self.panel = getattr(self, 'panel', None), None
+        if w is not None:
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
+        try:                                               # back to SmartKit
+            self.deiconify(); self.lift(); self.focus_force()
+            self.attributes('-topmost', True); self.after(300, lambda: self.attributes('-topmost', False))
+        except tk.TclError:
+            pass
 
     def editor_closed(self, err):
         self.btn_editor.configure(text='Open plugin window (choose kit)')
+        self.close_plugin_panel()
+        if getattr(self, 'editor_cancel', False):
+            self.editor_cancel = False
+            before = getattr(self, 'editor_before', None)
+            if before:
+                def job():
+                    try:
+                        self.host.set_state(before)
+                    except Exception as e:
+                        self.log(f'Could not put the kit back: {e}')
+                self.run_bg(job, lambda r: self.status.set('Plugin window closed – kit unchanged.'),
+                            'Putting the kit back as it was …')
+            else:
+                self.status.set('Plugin window closed – kit unchanged.')
+            return
         if err is not None:
             self.log(f'Plugin window: {err}')
             messagebox.showerror('SmartKit', f'Could not open the plugin window: {err}'); return
