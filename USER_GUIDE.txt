@@ -56,9 +56,12 @@ START: double-click "SmartKit Studio.bat"
                  "Library names" renames every sound this way (also ones you renamed before).
                    - click the box in the "use" column to switch a sound on/off (on a group: all of it)
                    - double-click a name to rename it
-                   - right-click the type or the Strike pad to change it (hi-hat positions are in the
-                     "Hi-hat" submenu). Choosing a pad takes it away from the sound that had it; to put
-                     two sounds of the same drum on one pad use "Share a pad with another sound".
+                   - right-click the type to change it
+                   - click the "layer A" or "layer B" column to choose the Strike pad(s). Every Strike pad
+                     has two layers that play together: layer A is the main sound, layer B an extra one
+                     (e.g. a second snare, or a clap on the snare). Hi-hat positions are in layer A's
+                     "Hi-hat" submenu. Choosing a pad layer takes it away from the sound that had it; to
+                     mix two sounds into ONE instrument on the same layer use "Share layer … (combine)".
                    - pad "Instrument only": the sound is saved as a user instrument but NOT put in the
                      kit (e.g. rimshot kept for later: clone the kit on the module and swap it in)
                    - values with * were chosen automatically – check them by ear
@@ -81,7 +84,7 @@ START: double-click "SmartKit Studio.bat"
                  Empty pad zones (crash bow, ride edge/bell, rims, kick 2) can play their partner.
                  Hi-hat closed at 127 = factory pedal layout (…/67-90/91-126/127).
                  Plugin start-up wait: SmartKit checks for sound itself, so 15 s is enough.
-                 Velocities, takes, memory, several sounds on one pad (combine or layer A + B),
+                 Velocities, takes, memory,
                  and the size of "Instrument only" sounds (0 = as big as the same kind in the kit).
                  Memory planner: per type a priority 0-10 (10 = gets memory first, 0 = always the
                  smallest setting) and mono / stereo if wide / stereo. "Defaults" resets them.

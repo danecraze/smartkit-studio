@@ -384,13 +384,13 @@ def build_kit(artics, pad_override, args, log=print):
         if folders == 'kit':
             return kit
         if folders == 'nested':                          # Instruments/<kit>/CRASH/<instrument>.sin
-            m = re.match(r'(SPL|CHN|STK)[A-Z0-9]{2}\d*_', inst['name'])
-            t = {'SPL': 'SPLASH', 'CHN': 'CHINA', 'STK': 'STACK'}[m.group(1)] if m else \
+            m = re.match(r'(SPL|CHN|STK|SP\d|CN\d|ST\d)[A-Z0-9]{2}\d*_', inst['name'])
+            t = {'SP': 'SPLASH', 'CH': 'CHINA', 'CN': 'CHINA', 'ST': 'STACK'}[m.group(1)[:2]] if m else \
                 TYPE_SUB.get(role_of(inst), 'PERC')
             return f'{kit}/{t}'
         r = role_of(inst)
         t = TYPE_FOLDER.get(r, 'PERC')
-        if r == 'crash' and re.match(r'(SPL|CHN|STK)[A-Z0-9]{2}\d*_', inst['name']):
+        if r == 'crash' and re.match(r'(SPL|CHN|STK|SP\d|CN\d|ST\d)[A-Z0-9]{2}\d*_', inst['name']):
             t = 'SPLASH CHINAS'
         if folders == 'shared':
             return f'all {t}'
@@ -504,19 +504,33 @@ def build_kit(artics, pad_override, args, log=print):
             if note is not None:
                 pp[52] = note
             pad_patch[pid] = pp
+        layer_kw_b = {}
+        for pid, path in assign_b.items():               # layer B: its own type's settings and mix level
+            layer_kw_b[pid] = dict(layer_by_role.get(role_by_path.get(path, 'other'), {}))
+            if path in mix_level:
+                layer_kw_b[pid]['level'] = mix_level[path]
+            if pid not in pad_patch:                     # a pad with only layer B still gets its settings
+                pp = dict((getattr(args, 'pad_settings', None) or {}).get(role_by_path.get(path, 'other'), {}))
+                note = (getattr(args, 'pad_notes', None) or {}).get(pid)
+                if note is not None:
+                    pp[52] = note
+                pad_patch[pid] = pp
         skt = SF.write_skt_from_template(tpl, assign, default_layer={'vel_level': args.vel_level}, assign_b=assign_b,
-                                         layer_kw=layer_kw, pad_patch=pad_patch,
+                                         layer_kw=layer_kw, layer_kw_b=layer_kw_b, pad_patch=pad_patch,
                                          header_patch=getattr(args, 'kit_fx', None))
         p = os.path.join(args.out, 'Kits', kit + '.skt')
         os.makedirs(os.path.dirname(p), exist_ok=True)
         open(p, 'wb').write(skt)
 
     summary = {'kit': kit, 'budget_mib': args.budget, 'used_mib': round(used / MiB, 2),
-               'pads': {pid: a.name for pid, a in pads.items()}, 'instruments': report,
+               'pads': {pid: a.name for pid, a in pads.items()},
+               'pads_b': {pid: a.name for pid, a in pads_b.items()}, 'instruments': report,
                'extras': [r['instrument'] for r in report if not r['in_kit']]}
     os.makedirs(args.out, exist_ok=True)
     json.dump(summary, open(os.path.join(args.out, 'smartkit_report.json'), 'w'), indent=1)
     log(f'\nKit "{kit}": {used / MiB:.1f} MiB of {args.budget} MiB budget')
+    if pads_b and not getattr(args, 'no_pads', False):
+        log('Layer B: ' + ', '.join(f'{pid} {a.name}' for pid, a in sorted(pads_b.items())))
     for r in report:
         log(f"  {r['folder']}/{r['instrument']}  ({r['zones']} zones, gain {r['gain_db']:+.1f} dB)"
             + ('' if r['in_kit'] else '   [instrument only – not in the kit]'))

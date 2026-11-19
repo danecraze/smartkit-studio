@@ -438,6 +438,8 @@ def scan_sin(paths, log=print):
         first = next(iter(groups.values()))[0]['f']
         m = CONV_RE.match(os.path.splitext(os.path.basename(first))[0])
         code0, num = conv_code(m.group('code')) if m else (None, 1)
+        if not code0 and '_' in name:                       # SmartKit's own names: TM2HD_8x12 Ludwig …
+            code0, num = sd3names.internal_code(name.split('_', 1)[0])
         code0 = code0 or guess_from_words(WORDS(name) + WORDS(os.path.basename(os.path.dirname(path)))) or 'PRCHT'
         if not hat_like:
             out.append(make_sound(os.path.basename(os.path.dirname(path)), name, code0, num, groups[(0, 127, False)],

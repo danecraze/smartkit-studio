@@ -435,6 +435,38 @@ def ask_string(parent, title, prompt, initial='', maxlen=None):
     return d.show() or None
 
 
+def column_lines(tree, colour=None):
+    """Thin vertical lines between a Treeview's columns (ttk has none), kept in place when columns are resized."""
+    lines = []
+
+    def draw(_=None):
+        try:
+            cols = ['#0'] + list(tree['displaycolumns'] if tree['displaycolumns'] != ('#all',) else tree['columns'])
+            if 'tree' not in str(tree['show']):
+                cols = cols[1:]
+            x, xs = 0, []
+            for c in cols[:-1]:
+                x += int(tree.column(c, 'width'))
+                xs.append(x)
+            h = tree.winfo_height()
+        except tk.TclError:
+            return
+        while len(lines) < len(xs):
+            lines.append(tk.Frame(tree, width=1, background=colour or C['border'], highlightthickness=0, bd=0))
+        for ln, x in zip(lines, xs):
+            ln.configure(background=colour or C['border'])
+            ln.place(x=x - 1, y=0, width=1, height=h)
+        for ln in lines[len(xs):]:
+            ln.place_forget()
+
+    tree.bind('<Configure>', lambda e: (tree.after_idle(draw), tree.after(60, draw)), add='+')
+    tree.bind('<ButtonRelease-1>', lambda e: tree.after(10, draw), add='+')
+    tree.bind('<B1-Motion>', lambda e: tree.after(10, draw) if tree.identify_region(e.x, e.y) == 'separator' else None,
+              add='+')
+    tree.after(50, draw)
+    return draw
+
+
 class _MessageBox:
     """Themed stand-ins for tkinter.messagebox (same call style: showinfo(title, message, parent=…)).
     Long messages wrap; Return = the main button, Escape = cancel / no."""

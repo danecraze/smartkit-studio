@@ -97,11 +97,12 @@ PAD_IDS = ['K1H', 'K2H', 'S1H', 'S1R', 'T1H', 'T1R', 'T2H', 'T2R', 'T3H', 'T3R',
 
 
 def write_skt_from_template(template, assign, layer_kw=None, default_layer=None, assign_b=None,
-                            header_patch=None, pad_patch=None):
+                            header_patch=None, pad_patch=None, layer_kw_b=None):
     """template: bytes of an existing .skt (header, pad order, pad settings are kept).
-    assign: {pad_id: instrument path ':Lib/name.sin'} for layer A; other pads emptied.
-    Layer B is always cleared."""
+    assign / assign_b: {pad_id: instrument path ':Lib/name.sin'} for layer A / layer B; other pads emptied.
+    layer_kw / layer_kw_b: layer settings per pad (level, decay …); layer B falls back to layer A's."""
     layer_kw = layer_kw or {}
+    layer_kw_b = layer_kw_b or {}
     chunks = read_chunks(template)
     strs, out = [], []
     for cid, d in chunks:
@@ -131,7 +132,7 @@ def write_skt_from_template(template, assign, layer_kw=None, default_layer=None,
             if pb:
                 if pb not in strs:
                     strs.append(pb)
-                kw = dict(default_layer or {}); kw.update(layer_kw.get(pid, {}))
+                kw = dict(default_layer or {}); kw.update(layer_kw_b.get(pid, layer_kw.get(pid, {})))
                 d[24:44] = layer_bytes(index=strs.index(pb), **kw)
             else:
                 d[24:44] = layer_bytes(index=0xFFFF, level=90)

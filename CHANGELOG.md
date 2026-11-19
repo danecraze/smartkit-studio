@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16
+- **Layer A and layer B.** The sounds list has a column for each layer of a Strike pad: click it to choose the
+  pad(s). A sound can go on layer A, layer B or both; sounds on the same layer of a pad can still be combined
+  into one instrument ("Share layer … (combine)"). Layer B gets its own type settings and mix level.
+  The "Several sounds on one pad" setting is gone (old projects that used "Layer A + Layer B" are moved over).
+- Pads are shown by name: "Crash 1 bow", "Tom 2 rim", "Hi-hat bow open 2" instead of C1B, T2R, H1B open 2.
+- Lines between the columns of the sounds list.
+- Strike names: toms and cymbals carry their number so they sit together in the module's list –
+  `TM1HD`, `TM2RI`, `CR1ED`, `CR1BW`, `RD1BW`, `SP1ED`, `CN1ED` (was `TOMHD`, `CRSED` …).
+
 ## 0.15
 - Plugin window: a small SmartKit panel floats beside it with **Kit chosen – back to SmartKit** and
   **Cancel – close without changes** (puts the kit back as it was). Both close the plugin window and bring

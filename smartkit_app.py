@@ -27,7 +27,7 @@ if sys.platform == 'win32':                     # own taskbar entry (with SmartK
 from analyse import load_articulation, dedupe, read_wav, measure, guess_role
 from plan import Artic, WEIGHT
 
-VERSION = '0.15'
+VERSION = '0.16'
 PROJECTS = os.path.join(HERE, 'Projects')
 PRESETS = os.path.join(HERE, 'Presets')
 SETTINGS_DIR = os.path.join(HERE, 'Settings')
@@ -43,6 +43,19 @@ HAT_SLOTS = (['H1B closed'] + [f'H1B open {i}' for i in range(1, 6)] +
              ['H1E closed'] + [f'H1E open {i}' for i in range(1, 6)] + ['H1F chick', 'H1F splash'])
 INST_ONLY = 'INST'          # 'pad' value: build the instrument but don't put it in the kit
 HAT_SLOT_NAMES = {'H1B': 'Hi-hat bow', 'H1E': 'Hi-hat edge', 'H1F': 'Hi-hat pedal'}
+
+
+def pad_label(p):
+    """'C1B' -> 'Crash 1 bow', 'H1B open 2' -> 'Hi-hat bow open 2'."""
+    if p == INST_ONLY:
+        return 'instrument only'
+    if p[:3] in HAT_SLOT_NAMES:
+        return f'{HAT_SLOT_NAMES[p[:3]]} {p[4:]}'.strip()
+    return PAD_NAMES.get(p, p)
+
+
+def pads_text(pads):
+    return ', '.join(pad_label(p) for p in pads)
 STEREO_MODES = ['mono', 'stereo if wide', 'stereo']
 DEFAULT_STEREO = {'crash': 'stereo if wide', 'ride': 'stereo if wide', 'hihat': 'stereo if wide'}
 TYPE_NAMES = {'kick': 'Kick', 'snare': 'Snare', 'rim': 'Rim / sidestick', 'tom': 'Toms', 'hihat': 'Hi-hat',
@@ -56,7 +69,6 @@ MEMORY_HELP = (
     "until the memory is full.\n"
     "Priority: 10 = upgraded first, 5 = half as keen, 0 = always the smallest setting.  Stereo doubles a sound's "
     "memory; 'stereo if wide' keeps stereo only when the recording really is wide (cymbals, overheads).")
-COMBINE_MODES = ['Combine into one instrument', 'Layer A + Layer B']
 FOLDER_MODES = ['A folder per type: <kit> KICKS, <kit> SNARES …', 'One folder for the whole kit',
                 'Shared type folders: all KICKS, all SNARES …',
                 'Kit folder with type subfolders: <kit>\\CRASH, <kit>\\SNARE …']
@@ -111,11 +123,14 @@ STEP_TEXT = {
     'sounds': "Press Find sounds for the plugin's sounds (Superior Drummer / EZdrummer: read from the plugin; other "
               "plugins: every MIDI note is tried). Sounds from sample sources (tab 1) are listed too and stay when you "
               "press Find sounds again.\n"
-              "Click ☐ to switch a sound on/off · double-click a name to rename · right-click the type or Strike pad "
-              "to change it · Space or ▶ to listen. Values marked * were chosen automatically – check them by ear.\n"
+              "Click ☐ to switch a sound on/off · double-click a name to rename · right-click the type to change it · "
+              "click 'layer A' or 'layer B' to choose the Strike pad(s): every pad has two layers that play together "
+              "(e.g. snare head on layer A + a second snare on layer B) · Space or ▶ to listen. Values marked * were chosen automatically – check them by ear.\n"
               "'Sound in the plugin' = articulation · drum (SD3 code). Strike names = 5-letter code + drum "
-              "(type first, then articulation: SNRHD_ snare head, SNRRI_ rimshot, SNRXS_ cross-stick, TOMHD_, KCKHD_, "
-              "HHBCL_ hi-hat bow closed, HHBO1_ bow open 1, HHECL_ edge closed, HHPCL_ pedal chick, CRSED_, RIDBW_ …). "
+              "(type first, then articulation: SNRHD_ snare head, SNRRI_ rimshot, SNRXS_ cross-stick, KCKHD_ kick, "
+              "TM1HD_ tom 1 head, TM2RI_ tom 2 rimshot, CR1ED_ crash 1 edge, CR1BW_ crash 1 bow, RD1BW_ ride bow, "
+              "HHBCL_ hi-hat bow closed, HHBO1_ bow open 1, HHECL_ edge closed, HHPCL_ pedal chick …). Toms and "
+              "cymbals carry their number so they sit together, in order, in the module's list. "
               "Articulations switched off in the plugin are left out. Pad 'Instrument only' saves a sound as a user instrument without putting it in the kit "
               "(e.g. a rimshot you may swap in later). Type sets memory priority, stereo for cymbals and hi-hat building.",
     'settings': "Defaults are a good start. More velocities and takes give the memory planner more to choose from "
@@ -216,6 +231,8 @@ class App(tk.Tk):
 
     def set_theme(self):
         T.apply(self, self.v_theme.get())
+        if hasattr(self, 'tree_lines'):
+            self.tree_lines()
         self.retag(); self.save_settings()
 
     def retag(self):
@@ -228,7 +245,7 @@ class App(tk.Tk):
 
     def save_settings(self):
         keys = ['plugin', 'kit', 'notes', 'vstep', 'reps', 'budget', 'curve', 'gain', 'hat', 'out',
-                'template', 'combine', 'extra_mb', 'levels', 'fill_empty', 'loadwait', 'inst_only', 'folders',
+                'template', 'extra_mb', 'levels', 'fill_empty', 'loadwait', 'inst_only', 'folders',
                 'comp', 'comp_db']
         d = {k: getattr(self, 'v_' + k).get() for k in keys if hasattr(self, 'v_' + k)}
         if hasattr(self, 'v_prio'):
@@ -745,6 +762,20 @@ class App(tk.Tk):
                 self.sources = d.get('sources', []) if isinstance(d, dict) else []
             except Exception:
                 pass
+        if self.st.get('combine') == 'Layer A + Layer B' and not any(r.get('pads_b') for r in self.rows.values()):
+            by = {}                                    # 0.15 setting: 2nd sound on a pad went to layer B
+            for k, r in sorted(self.rows.items()):
+                for pd in r.get('pads', []):
+                    if len(pd) == 3 and not pd.startswith('H1'):
+                        by.setdefault(pd, []).append(r)
+            for pd, rs in by.items():
+                if len(rs) > 1:
+                    rs[1]['pads'] = [x for x in rs[1]['pads'] if x != pd]
+                    rs[1].setdefault('pads_b', []).append(pd)
+        for r in self.rows.values():                  # projects from before 0.16
+            r.setdefault('pads_b', [])
+            if r.get('src') and 'name' in r.get('auto', []) and not r.get('dup') and r.get('base') and r.get('sfx'):
+                r['name'] = sd3names.fit(r['base'], sd3names.strike_code(r['sfx'], r.get('code', '')))
         sp = os.path.join(p, 'plugin_state.bin')
         if os.path.exists(sp):
             try:
@@ -842,7 +873,7 @@ class App(tk.Tk):
                     lbl = os.path.basename(path.rstrip('/\\')) if kind not in ('sin',) else 'Strike'
                     self.rows[key] = dict(
                         key=key, note=s['note'], notes=[s['note']], group=f"{lbl} / {s['group']}", code=s['code'],
-                        base=s['base'], sfx=s['sfx'], name=sd3names.fit(s['base'], s['sfx']),
+                        base=s['base'], sfx=s['sfx'], name=sd3names.fit(s['base'], sd3names.strike_code(s['sfx'], s['code'])),
                         full=f"{s['long']}  ·  {s['base']}  ({s['label'] or self.SRC_KIND.get(kind, kind)})",
                         role=s['role'], pads=[], use=not many, ring=s['ring'], peak=s['peak'], file=s['file'],
                         auto=['name', 'role', 'pads'], dup=None, src=s['src'], srcid=sid)
@@ -874,7 +905,7 @@ class App(tk.Tk):
         r['note'] = note if not code.startswith(('TOM', 'CRS')) else r['note']
         r['notes'] = [r['note']]
         if 'name' in r.get('auto', []):
-            r['name'] = sd3names.fit(r['base'], code)
+            r['name'] = sd3names.fit(r['base'], sd3names.strike_code(code, r.get('code', '')))
         r['full'] = f"{long}  ·  " + r['full'].split('  ·  ', 1)[-1]
         self.refresh_row(key); self.save_map()
 
@@ -904,7 +935,8 @@ class App(tk.Tk):
     def auto_name(self, a):
         """'6.5x14 TamaBellBr80s_RIMON': drum name from the sound library + 5-letter articulation code."""
         base = a.get('drum_name') or a['inst']
-        return sd3names.fit(base, sd3names.art_suffix(a['code'], a['role'], a['pos'])), base
+        return sd3names.fit(base, sd3names.strike_code(sd3names.art_suffix(a['code'], a['role'], a['pos']),
+                                                         a['code'])), base
 
     def full_name(self, a):
         """'Snare – 6.5x14" Tama Bell Brass 1980s – Rim only (snareRO)': for choosing pads."""
@@ -937,7 +969,7 @@ class App(tk.Tk):
                 a = self.art_of(r['key'])
                 if a: r['name'] = self.auto_name(a)[0]
             if r.get('src'):
-                r['name'] = sd3names.fit(r['base'], r['sfx'])
+                r['name'] = sd3names.fit(r['base'], sd3names.strike_code(r['sfx'], r.get('code', '')))
         self.fill_tree(); self.save_map()
 
     def plugin_path(self):
@@ -1204,13 +1236,14 @@ class App(tk.Tk):
         ttk.Checkbutton(b, text='Instruments only (no pads – assign them on the module)', variable=self.v_inst_only,
                         onvalue='1', offvalue='0', command=self.save_settings).pack(side='left', padx=12)
         self.pbar = ttk.Progressbar(t); self.pbar.pack(fill='x', padx=12, pady=(8, 4))
-        cols = ('use', 'full', 'name', 'type', 'pads', 'ring', 'level', 'notes')
+        cols = ('use', 'full', 'name', 'type', 'pads', 'padsb', 'ring', 'level', 'notes')
         tr = ttk.Treeview(t, columns=cols, show='tree headings', height=18)
         tr.column('#0', width=170, stretch=False); tr.heading('#0', text='instrument')
         for c, w, txt in [('use', 40, 'use'), ('full', 330, 'sound (plugin or samples) – double-click to play'), ('name', 200, 'Strike instrument name'),
-                          ('type', 70, 'type'), ('pads', 150, 'Strike pad(s)'), ('ring', 55, 'rings s'),
+                          ('type', 70, 'type'), ('pads', 150, 'Strike pad – layer A'),
+                          ('padsb', 130, 'layer B'), ('ring', 55, 'rings s'),
                           ('level', 60, 'level dB'), ('notes', 80, 'MIDI notes')]:
-            tr.heading(c, text=txt); tr.column(c, width=w, anchor='w', stretch=(c in ('full', 'name', 'pads')))
+            tr.heading(c, text=txt); tr.column(c, width=w, anchor='w', stretch=(c in ('full', 'name', 'pads', 'padsb')))
         ysb = ttk.Scrollbar(t, orient='vertical', command=tr.yview); tr.configure(yscrollcommand=ysb.set)
         ysb.pack(side='right', fill='y', padx=(0, 12), pady=(4, 12)); tr.pack(fill='both', expand=True, padx=(12, 0), pady=(4, 12))
         tr.bind('<Button-1>', self.on_click)
@@ -1218,6 +1251,7 @@ class App(tk.Tk):
         tr.bind('<Button-3>', self.on_right)
         tr.bind('<space>', lambda e: self.play_sel())
         self.tree = tr
+        self.tree_lines = T.column_lines(tr)
 
     # ---------- rows
     def parse_notes(self):
@@ -1342,9 +1376,9 @@ class App(tk.Tk):
 
     def row_values(self, r):
         star = lambda f: '*' if f in r.get('auto', []) else ''
-        pads = ' '.join('instrument only' if p == INST_ONLY else p for p in r['pads'])
+        pads = pads_text(r['pads'])
         return ('☑' if r['use'] else '☐', r.get('full') or r['name'], r['name'] + star('name'),
-                r['role'] + star('role'), (pads + star('pads')) if pads else '',
+                r['role'] + star('role'), (pads + star('pads')) if pads else '', pads_text(r.get('pads_b', [])),
                 r['ring'] or '', f"{20 * np.log10(max(r['peak'], 1e-9)):.1f}" if r.get('peak') else '',
                 ' '.join(map(str, r['notes'][:4])))
 
@@ -1352,7 +1386,7 @@ class App(tk.Tk):
         kids = self.tree.get_children(gid)
         on = sum(self.rows[k]['use'] for k in kids)
         mark = '☑' if on == len(kids) else ('☐' if on == 0 else '◪')
-        self.tree.item(gid, values=(mark, '', f'{on} of {len(kids)} used', '', '', '', ''))
+        self.tree.item(gid, values=(mark, '', f'{on} of {len(kids)} used', '', '', '', '', ''))
         self.kit_summary()
 
     def kit_summary(self):
@@ -1386,6 +1420,10 @@ class App(tk.Tk):
 
     def on_click(self, e):
         iid, col = self.cell(e)
+        if iid and not iid.startswith('g|') and self.colname(col) in ('pads', 'padsb'):
+            self.tree.selection_set(iid)
+            self.pad_menu(iid, e, layer='B' if self.colname(col) == 'padsb' else 'A')
+            return 'break'
         if not iid or self.colname(col) != 'use':
             return
         if iid.startswith('g|'):
@@ -1406,8 +1444,8 @@ class App(tk.Tk):
             self.edit_name(iid, col)
         elif self.colname(col) in ('type',):
             self.edit_type(iid, col)
-        elif self.colname(col) == 'pads':
-            self.pad_menu(iid, e)
+        elif self.colname(col) in ('pads', 'padsb'):
+            return 'break'
         else:
             self.play_key(iid)
         return 'break'
@@ -1444,7 +1482,8 @@ class App(tk.Tk):
                         sm.add_command(label=f'{c}  {SRC.describe(c)[1]}', command=lambda c=c: self.set_code(iid, c))
                     cm.add_cascade(label=grp, menu=sm)
                 m.add_cascade(label='Code (5 letters)', menu=cm)
-            m.add_command(label='Strike pads…', command=lambda: self.pad_menu(iid, e))
+            m.add_command(label='Strike pad – layer A…', command=lambda: self.pad_menu(iid, e, 'A'))
+            m.add_command(label='Strike pad – layer B…', command=lambda: self.pad_menu(iid, e, 'B'))
             m.tk_popup(e.x_root, e.y_root)
 
     def set_field(self, key, field, value):
@@ -1486,49 +1525,64 @@ class App(tk.Tk):
         self.place_editor(key, col, cb)
         self.after(50, lambda: cb.event_generate('<Button-1>'))
 
-    def pad_menu(self, key, e):
+    def pad_menu(self, key, e, layer='A'):
+        """Pads for layer A (the 'pads' column) or layer B ('pads_b'). A pad's layer plays one sound unless
+        sounds are deliberately combined on it ('together with')."""
         r = self.rows[key]
+        f = 'pads' if layer == 'A' else 'pads_b'
+        other_f = 'pads_b' if layer == 'A' else 'pads'
+        r.setdefault('pads_b', [])
         m = T.Menu(self)
         vs = {}
 
         def toggle(p, combine=False):
-            pads = list(r['pads'])
-            pads = [x for x in pads if x != INST_ONLY]
+            pads = [x for x in r.get(f, []) if x != INST_ONLY]
             if p in pads:
                 pads.remove(p)
             else:
                 if p.startswith('H1'):                    # one hi-hat slot per sound row
                     pads = [x for x in pads if not x.startswith(p[:3])]
                 pads.append(p)
-                if not combine:                           # a pad (or hi-hat slot) plays one sound: take it away from others
+                if not combine:                           # a pad layer (or hi-hat slot) plays one sound
                     for k, o in self.rows.items():
-                        if k != key and p in o['pads']:
-                            o['pads'] = [x for x in o['pads'] if x != p]
-                            if 'pads' in o.get('auto', []): o['auto'].remove('pads')
+                        if k != key and p in o.get(f, []):
+                            o[f] = [x for x in o[f] if x != p]
+                            if f == 'pads' and 'pads' in o.get('auto', []): o['auto'].remove('pads')
                             self.refresh_row(k)
-            self.set_field(key, 'pads', pads)
+            if f == 'pads_b':
+                r['pads_b'] = pads; self.refresh_row(key); self.save_map()
+            else:
+                self.set_field(key, 'pads', pads)
+        m.add_command(label=f'Layer {layer} of the pad' + (' (main sound)' if layer == 'A' else
+                                                          ' (plays together with layer A)'), state='disabled')
+        m.add_separator()
         cm = T.Menu(m)
         for p in PADS:
-            vs[p] = tk.BooleanVar(value=p in r['pads'])
-            others = [o['name'] for k, o in self.rows.items() if k != key and p in o['pads']]
-            lab = f'{p}  {PAD_NAMES[p]}' + (f'   (now: {", ".join(others)[:40]})' if others else '')
+            vs[p] = tk.BooleanVar(value=p in r.get(f, []))
+            others = [o['name'] for k, o in self.rows.items() if k != key and p in o.get(f, [])]
+            lab = PAD_NAMES[p] + (f'   (now: {", ".join(others)[:40]})' if others else '')
             m.add_checkbutton(label=lab, variable=vs[p], command=lambda p=p: toggle(p))
-            if others and p not in r['pads']:
-                cm.add_command(label=f'{p}  {PAD_NAMES[p]}  together with {", ".join(others)[:40]}',
+            if others and p not in r.get(f, []):
+                cm.add_command(label=f'{PAD_NAMES[p]}  together with {", ".join(others)[:40]}',
                                command=lambda p=p: toggle(p, combine=True))
-        hm = T.Menu(m)
-        for p in HAT_SLOTS:
-            vs[p] = tk.BooleanVar(value=p in r['pads'])
-            hm.add_checkbutton(label=f'{HAT_SLOT_NAMES[p[:3]]} – {p[4:]}', variable=vs[p], command=lambda p=p: toggle(p))
         m.add_separator()
-        m.add_cascade(label='Hi-hat', menu=hm)
+        if layer == 'A':
+            hm = T.Menu(m)
+            for p in HAT_SLOTS:
+                vs[p] = tk.BooleanVar(value=p in r['pads'])
+                hm.add_checkbutton(label=pad_label(p), variable=vs[p], command=lambda p=p: toggle(p))
+            m.add_cascade(label='Hi-hat', menu=hm)
         if cm.index('end') is not None:
-            m.add_cascade(label='Share a pad with another sound (combine)', menu=cm)
+            m.add_cascade(label=f'Share layer {layer} of a pad with another sound (combine)', menu=cm)
         m.add_separator()
-        vs[INST_ONLY] = tk.BooleanVar(value=INST_ONLY in r['pads'])
-        m.add_checkbutton(label='Instrument only (saved to Instruments, not in the kit)', variable=vs[INST_ONLY],
-                          command=lambda: self.set_field(key, 'pads', [] if INST_ONLY in r['pads'] else [INST_ONLY]))
-        m.add_command(label='No pad', command=lambda: self.set_field(key, 'pads', []))
+        if layer == 'A':
+            vs[INST_ONLY] = tk.BooleanVar(value=INST_ONLY in r['pads'])
+            m.add_checkbutton(label='Instrument only (saved to Instruments, not in the kit)', variable=vs[INST_ONLY],
+                              command=lambda: self.set_field(key, 'pads', [] if INST_ONLY in r['pads'] else [INST_ONLY]))
+            m.add_command(label='No pad', command=lambda: self.set_field(key, 'pads', []))
+        else:
+            m.add_command(label='No layer B', command=lambda: (r.__setitem__('pads_b', []), self.refresh_row(key),
+                                                               self.save_map()))
         m.tk_popup(e.x_root, e.y_root)
 
     def sel(self):
@@ -1659,7 +1713,8 @@ class App(tk.Tk):
         if not p: return
         d = {}
         for r in self.rows.values():
-            d.setdefault(self.preset_key(r), {'pads': r['pads'], 'use': r['use'], 'note': r['note'],
+            d.setdefault(self.preset_key(r), {'pads': r['pads'], 'pads_b': r.get('pads_b', []), 'use': r['use'],
+                                              'note': r['note'],
                                               'name': None if 'name' in r.get('auto', []) else r['name'],
                                               'role': None if 'role' in r.get('auto', []) else r['role']})
         json.dump({'smartkit_preset': 1, 'rows': d}, open(p, 'w'), indent=1)
@@ -1675,6 +1730,7 @@ class App(tk.Tk):
             v = d.get(self.preset_key(r)) or (by_note.get(r['note']) if not r.get('code') else None)
             if not v: continue
             r['pads'], r['use'] = list(v['pads']), v['use']
+            r['pads_b'] = list(v.get('pads_b', []))
             r['auto'] = [x for x in r.get('auto', []) if x != 'pads']
             for f in ('name', 'role'):
                 if v.get(f):
@@ -1696,7 +1752,6 @@ class App(tk.Tk):
             ('Sample memory to use (MB, max 200)', 'budget', '196', None),
             ('Velocity curve (1 = even steps, >1 = more soft layers)', 'curve', '1.0', None),
             ('Hi-hat closed at pedal value (127 = factory layout)', 'hat', '127', None),
-            ('Several sounds on one pad', 'combine', COMBINE_MODES[0], COMBINE_MODES),
             ("'Instrument only' sounds: max MB each (0 = same as the kit's)", 'extra_mb', '0', None),
             ('Levels', 'levels', LEVEL_MODES[0], LEVEL_MODES),
             ('Instrument folders on the card', 'folders', FOLDER_NESTED, FOLDER_MODES),
@@ -1783,7 +1838,7 @@ class App(tk.Tk):
     def used_rows(self):
         if self.inst_only():                     # every ticked sound becomes an instrument
             return [r for r in self.rows.values() if r['use']]
-        return [r for r in self.rows.values() if r['use'] and r['pads']]
+        return [r for r in self.rows.values() if r['use'] and (r['pads'] or r.get('pads_b'))]
 
     def do_estimate(self):
         rows = self.used_rows()
@@ -1882,10 +1937,11 @@ class App(tk.Tk):
 
     def pad_notes(self, rows):
         notes = dict(HAT_NOTES)
-        for r in rows:
-            for p in r['pads']:
-                if len(p) == 3 and p not in notes and not p.startswith('H1'):
-                    notes[p] = int(r['note'])
+        for fld in ('pads', 'pads_b'):                 # layer A's sound sends the pad's MIDI note, else layer B's
+            for r in rows:
+                for p in r.get(fld, []):
+                    if len(p) == 3 and p not in notes and not p.startswith('H1'):
+                        notes[p] = int(r['note'])
         return notes
 
     # ============================================================ tab 5: record & build
@@ -2027,7 +2083,6 @@ class App(tk.Tk):
         kit = safe_name(self.v_kit.get())[:26]
         self.save_settings(); self.save_map()
         self.log(f"\n===== Build {time.strftime('%Y-%m-%d %H:%M')} – SmartKit {VERSION} =====")
-        layered = self.v_combine.get() == COMBINE_MODES[1]
         opts = types.SimpleNamespace(out=out, kit=kit, budget=float(self.v_budget.get() or 196),
                                      template=self.v_template.get().strip() or None, curve=float(self.v_curve.get() or 1),
                                      vel_level=0, hat_closed_from=int(self.v_hat.get() or 127),
@@ -2101,34 +2156,30 @@ class App(tk.Tk):
                         a.solo = True; artics.append(a)
                 opts.no_pads = True
                 return SK.build_kit(artics, {}, opts, log=self.log) if artics else None
-            # other pads: sounds sharing a pad are combined (or A + B)
-            by_pad = {}
+            # other pads: layer A and layer B; sounds sharing one layer of a pad are combined into one instrument
+            by_pad = {'A': {}, 'B': {}}
             for r in rows:
-                for p in r['pads']:
-                    if not p.startswith('H1') and p != INST_ONLY:
-                        by_pad.setdefault(p, []).append(r)
+                for lay, fld in (('A', 'pads'), ('B', 'pads_b')):
+                    for p in r.get(fld, []):
+                        if not p.startswith('H1') and p != INST_ONLY:
+                            by_pad[lay].setdefault(p, []).append(r)
             def joined(g):
                 if len(g) == 1:
                     return g[0]['name']
                 if all('name' in x.get('auto', []) for x in g) and len({x.get('base') for x in g}) == 1 and g[0].get('base'):
-                    sf = [x.get('sfx') or 'PRCHT' for x in g]    # SNRHD + SNRMU -> SNRHDMU (type once, then each articulation)
-                    t = os.path.commonprefix(sf)[:3]
+                    sf = [sd3names.strike_code(x.get('sfx') or 'PRCHT', x.get('code', '')) for x in g]
+                    t = os.path.commonprefix(sf)[:3]         # SNRHD + SNRMU -> SNRHDMU (type once, then each articulation)
                     return sd3names.fit(g[0]['base'], (t + ''.join(c[len(t):][:2] for c in sf))[:7])
                 return ' - '.join(x['name'] for x in g)
-            for p, rs in sorted(by_pad.items()):
-                if layered and len(rs) > 1:
-                    groups = [[rs[0]], [rs[1]]]
-                    if len(rs) > 2: self.log(f'  {p}: only 2 layers possible – using {rs[0]["name"]} + {rs[1]["name"]}')
-                else:
-                    groups = [rs]
-                for li, g in enumerate(groups):
+            for lay in ('A', 'B'):
+                for p, g in sorted(by_pad[lay].items()):
                     keys = tuple(sorted(r['key'] for r in g))
                     if keys not in cache:
                         name = joined(g)
                         cache[keys] = make(name, g[0]['role'], keys)
                         if cache[keys]: artics.append(cache[keys])
                     if cache[keys]:
-                        (pads if li == 0 else opts.pads_b)[p] = cache[keys]
+                        (pads if lay == 'A' else opts.pads_b)[p] = cache[keys]
             for r in rows:                              # 'instrument only': built, not put in the kit
                 if INST_ONLY in r['pads']:
                     a = make(r['name'], r['role'], [r['key']])

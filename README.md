@@ -43,7 +43,9 @@ folder of drum samples into a ready-to-play kit for the Alesis Strike / Strike P
 - **Hi-hats built like factory ones.** Bow, edge and pedal instruments with the factory pedal ranges
   (closed = 127; opens 91–126 / 67–90 / 37–66 / 0–36), chick + foot splash (splash zones 7–127).
 - **Clear names.** Every instrument gets a 5-letter type-first code + drum name, e.g. `SNRHD_14 SONOR Designer`,
-  `HHBO1_14 Agop Trad Jazz`, `CRSED_18 Agop 30th Anniv` (see [docs/NAMING_CODES.md](docs/NAMING_CODES.md)).
+  `TM2HD_12 Gretsch USA`, `HHBO1_14 Agop Trad Jazz`, `CR1ED_18 Agop 30th Anniv` – toms and cymbals carry their
+  number so they sit together in the module's list (see [docs/NAMING_CODES.md](docs/NAMING_CODES.md)).
+- **Layer A and B.** Every Strike pad has two layers; give each sound a pad on layer A, layer B or both.
   Sample files carry instrument, pedal position, velocity and take.
 - **Strike settings.** Defaults per drum type for level, pan, decay, pitch, filter, velocity → level / decay /
   filter / pitch and velocity range; kit reverb, compressor and EQ; pad MIDI notes; folders per kit and type.

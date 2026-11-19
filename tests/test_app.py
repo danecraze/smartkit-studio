@@ -275,3 +275,50 @@ def test_themed_popups_and_plugin_panel(tmp_path, monkeypatch):
         assert app.panel is None and not app.editor_cancel
     finally:
         app.destroy()
+
+
+def test_layer_b_and_numbered_names(converter_library, tmp_path, monkeypatch):
+    """A sound on layer B of a pad ends up in the kit's layer B; toms/crashes are named TM1HD…, CR1ED…;
+    pads are shown by name."""
+    tk = pytest.importorskip('tkinter')
+    try:
+        r = tk.Tk(); r.destroy()
+    except tk.TclError:
+        pytest.skip('no display')
+    import smartkit_app as A, strikefmt as SF, sources as SRC
+    monkeypatch.setattr(A, 'PROJECTS', str(tmp_path / 'Projects'))
+    monkeypatch.setattr(A, 'SETTINGS_FILE', str(tmp_path / 'studio_settings.json'))
+    for name in ('showinfo', 'showerror', 'showwarning'):
+        monkeypatch.setattr(A.messagebox, name, lambda *a, **k: None)
+    monkeypatch.setattr(A.messagebox, 'askyesno', lambda *a, **k: True)
+    app = A.App()
+    try:
+        app.run_bg = lambda fn, done=None, text='': (lambda res: done(res) if done else None)(fn())
+        app.notify = lambda *a, **k: None
+        app.v_kit.set('Layer Kit'); app.refresh_project()
+        out = str(tmp_path / 'card'); app.v_out.set(out)
+        app.add_source([converter_library], 'folder')
+        names = sorted(r['name'] for r in app.rows.values())
+        assert any(n.startswith('TM1HD_') for n in names) and any(n.startswith('TM3HD_') for n in names)
+        assert not any(n.startswith(('TOMHD', 'CRSED')) for n in names)
+        rim = next(k for k, r in app.rows.items() if r['sfx'] == 'SNRRI')
+        tom = next(k for k, r in app.rows.items() if r['name'].startswith('TM1HD'))
+        app.rows[rim]['pads_b'] = ['S1H']                       # rimshot as layer B of the snare head
+        app.rows[tom]['pads_b'] = ['T2H']                       # tom 1 also on layer B of tom 2
+        assert 'Snare head' in app.row_values(app.rows[rim])[5]
+        assert A.pad_label('C1B') == 'Crash 1 bow' and A.pad_label('H1B open 2') == 'Hi-hat bow open 2'
+        app.do_build(); app.update()
+        skt = open(glob.glob(os.path.join(out, 'Kits', '*.skt'))[0], 'rb').read()
+        insts = {d[:3].decode('latin1'): d for cid, d in SF.read_chunks(skt) if cid == 'inst'}
+        strs = [d for cid, d in SF.read_chunks(skt) if cid == 'str '][0]
+        paths = SF.parse_strs(strs)
+        b = lambda pid: int.from_bytes(insts[pid][24:26], 'little')
+        a = lambda pid: int.from_bytes(insts[pid][4:6], 'little')
+        assert b('S1H') != 0xFFFF and 'SNRRI' in paths[b('S1H')] and 'SNRHD' in paths[a('S1H')]
+        assert b('T2H') != 0xFFFF and 'TM1HD' in paths[b('T2H')] and 'TM2HD' in paths[a('T2H')]
+        assert b('K1H') == 0xFFFF
+        sins = glob.glob(os.path.join(out, 'Instruments', '**', 'TM2HD_*.sin'), recursive=True)
+        back = SRC.scan_sin(sins, log=lambda *a: None)          # SmartKit's own names read back
+        assert back and back[0]['sfx'] == 'TOMHD' and back[0]['num'] == 2
+    finally:
+        app.destroy()

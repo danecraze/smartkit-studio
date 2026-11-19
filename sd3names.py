@@ -43,6 +43,35 @@ RIDE_ART = dict(CYM_ART, **{'': ('Bow tip', 'BW'), 'PU': ('Crashed (edge)', 'ED'
 HAT_BOW, HAT_EDGE, HAT_PEDAL = 'HHBOW', 'HHEDG', 'HHPED'
 
 
+# Numbered drums and cymbals in Strike names: the drum number goes into the code so a kit's toms and crashes
+# sit together, in order, in the module's instrument list (TM1HD, TM1RI, TM2HD … CR1ED, CR1BW, CR2ED …).
+NUMBERED = {'TOM': 'TM', 'CRS': 'CR', 'RID': 'RD', 'SPL': 'SP', 'CHN': 'CN', 'STK': 'ST'}
+UNNUMBERED = {v: k for k, v in NUMBERED.items()}
+
+
+def drum_number(code):
+    """'tom3R' -> 3, 'crash2RT' -> 2, 'ride' -> 1 (SD3-style code of a sound)."""
+    m = re.match(r'[a-zA-Z]+?(\d+)', code or '')
+    return int(m.group(1)) if m else 1
+
+
+def strike_code(sfx, code=''):
+    """Internal 5-letter code + the sound's SD3-style code -> the code in the Strike name:
+    ('TOMHD', 'tom3R') -> 'TM3HD', ('CRSBW', 'crash1RT') -> 'CR1BW'; others unchanged (SNRHD, HHBO1, KCKHD)."""
+    if sfx and sfx[:3] in NUMBERED:
+        return f'{NUMBERED[sfx[:3]]}{min(drum_number(code), 9)}{sfx[3:]}'
+    return sfx
+
+
+def internal_code(c):
+    """Code from a Strike name back to (internal code, drum number): 'TM3HD' -> ('TOMHD', 3), 'SNRHD' -> ('SNRHD', 1)."""
+    m = re.fullmatch(r'(TM|CR|RD|SP|CN|ST)(\d)([A-Z0-9]{2,4})', c or '')
+    if m:
+        return UNNUMBERED[m.group(1)] + m.group(3), int(m.group(2))
+    m = re.fullmatch(r'(TOM|CRS|RID|SPL|CHN|STK|SNR|KCK|PRC)([A-Z0-9]{2,4})|HH[BELP][A-Z0-9]{2}', c or '')
+    return (c, 1) if m else (None, 1)
+
+
 def type_code(role, pos=''):
     p = (pos or '').lower()
     if role in ('crash', 'ride', 'other'):

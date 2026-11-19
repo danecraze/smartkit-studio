@@ -5,13 +5,20 @@ Every Strike instrument SmartKit writes is named `<CODE>_<drum name>` (max 26 pl
 
 ## Type (first 3 letters)
 
+Toms and cymbals carry their number, so a kit's toms and crashes sit together, in order, in the module's
+instrument list (`TM1HD`, `TM1RI`, `TM2HD` … `CR1ED`, `CR1BW`, `CR2ED` …).
+
 | Code | Type | Code | Type |
 |---|---|---|---|
-| `KCK` | kick | `CRS` | crash |
-| `SNR` | snare | `RID` | ride |
-| `TOM` | tom | `SPL` | splash |
-| `HH` + surface | hi-hat (`HHB` bow, `HHE` edge, `HHL` bell, `HHP` pedal) | `CHN` | china |
-| `PRC` | percussion / other | `STK` | stack |
+| `KCK` | kick | `CR1`…`CR9` | crash 1 … |
+| `SNR` | snare | `RD1`, `RD2` | ride 1, 2 |
+| `TM1`…`TM9` | tom 1 … (1 = highest) | `SP1`… | splash |
+| `HH` + surface | hi-hat (`HHB` bow, `HHE` edge, `HHL` bell, `HHP` pedal) | `CN1`… | china |
+| `PRC` | percussion / other | `ST1`… | stack |
+
+(Before SmartKit 0.16 these were `TOM`, `CRS`, `RID`, `SPL`, `CHN`, `STK` without a number. The tables below
+still use those internal codes; the number is added when the instrument is named. Strike instruments with
+either kind of name are read back correctly.)
 
 ## Articulation (last 2 letters)
 
